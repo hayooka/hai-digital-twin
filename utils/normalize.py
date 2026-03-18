@@ -1,9 +1,19 @@
 """
-Normalization utilities for the HAI dataset (225 sensors).
+Normalization utilities for the merged HAI + HAIEnd dataset (277 features).
 
-Provides per-sensor z-score and min-max normalization with a std clamp fix:
+Provides per-feature z-score and min-max normalization with a std clamp fix:
   std values below MIN_STD are clamped to MIN_STD to prevent division by zero
   or exploding values for near-constant sensor channels.
+
+The normalizer works with both:
+  - numpy arrays  (N, 277) — output of data_loader.load_split
+  - pandas DataFrames      — for column-aware usage
+
+Typical usage with numpy arrays:
+    norm = HAISensorNormalizer()
+    X_train_scaled            = norm.fit_transform_array(X_train)
+    X_test_scaled             = norm.transform_array(X_test)
+    norm.save("scaler.json")
 """
 
 import numpy as np
@@ -11,8 +21,9 @@ import pandas as pd
 from pathlib import Path
 import json
 
-# HAI dataset: 225 sensor/actuator columns (excludes timestamp and attack label)
-N_SENSORS = 225
+# Merged HAI + HAIEnd feature count (86 HAI + 225 HAIEnd − duplicates = 277)
+N_FEATURES = 277
+N_SENSORS  = N_FEATURES   # backward-compat alias
 
 # Minimum allowed std before clamping — prevents blow-up on constant channels
 MIN_STD = 1e-6
@@ -40,8 +51,9 @@ class HAISensorNormalizer:
         Parameters
         ----------
         method      : "zscore" or "minmax"
-        sensor_cols : explicit list of column names to normalize.
-                      If None, all numeric columns (up to N_SENSORS) are used.
+        sensor_cols : explicit list of column names to normalize (DataFrame mode).
+                      If None, all numeric columns (up to N_FEATURES) are used.
+                      Ignored when using the array API (fit_array / transform_array).
         """
         if method not in ("zscore", "minmax"):
             raise ValueError(f"method must be 'zscore' or 'minmax', got '{method}'")
@@ -65,7 +77,7 @@ class HAISensorNormalizer:
                  "attack_p2", "attack_p3"}
         cols = [c for c in df.select_dtypes(include=[np.number]).columns
                 if c.lower() not in meta]
-        return cols[:N_SENSORS]
+        return cols[:N_FEATURES]
 
     # ------------------------------------------------------------------
     # Public API
@@ -119,6 +131,85 @@ class HAISensorNormalizer:
         """Fit on df then transform it (convenience for training split)."""
         return self.fit(df).transform(df)
 
+    # ------------------------------------------------------------------
+    # Numpy array API  — primary path when using data_loader output
+    # ------------------------------------------------------------------
+
+    def fit_array(self, X: np.ndarray) -> "HAISensorNormalizer":
+        """
+        Fit on a (N, F) float32 array (output of load_split).
+        Stores per-feature statistics indexed by integer position.
+        """
+        if X.ndim != 2:
+            raise ValueError(f"Expected 2-D array, got shape {X.shape}")
+
+        n_features = X.shape[1]
+        self._arr_stats: dict[int, dict] = {}
+
+        if self.method == "zscore":
+            mean = X.mean(axis=0)
+            std  = X.std(axis=0, ddof=0)
+            std  = np.where(std < MIN_STD, MIN_STD, std)
+            for i in range(n_features):
+                self._arr_stats[i] = {"mean": float(mean[i]), "std": float(std[i])}
+
+        else:  # minmax
+            lo  = X.min(axis=0)
+            hi  = X.max(axis=0)
+            rng = hi - lo
+            rng = np.where(rng < MIN_STD, MIN_STD, rng)
+            for i in range(n_features):
+                self._arr_stats[i] = {"min": float(lo[i]), "max": float(hi[i]),
+                                      "range": float(rng[i])}
+
+        self._n_features = n_features
+        self._fitted = True
+        return self
+
+    def transform_array(self, X: np.ndarray) -> np.ndarray:
+        """Apply fitted statistics to a (N, F) array. Returns float32."""
+        self._check_fitted()
+        if not hasattr(self, '_arr_stats'):
+            raise RuntimeError("Fitted with DataFrame API — use transform() instead.")
+
+        X = X.astype(np.float32)
+        if self.method == "zscore":
+            mean = np.array([self._arr_stats[i]["mean"] for i in range(self._n_features)],
+                            dtype=np.float32)
+            std  = np.array([self._arr_stats[i]["std"]  for i in range(self._n_features)],
+                            dtype=np.float32)
+            return (X - mean) / std
+        else:
+            lo  = np.array([self._arr_stats[i]["min"]   for i in range(self._n_features)],
+                           dtype=np.float32)
+            rng = np.array([self._arr_stats[i]["range"] for i in range(self._n_features)],
+                           dtype=np.float32)
+            return (X - lo) / rng
+
+    def fit_transform_array(self, X: np.ndarray) -> np.ndarray:
+        """Fit on X then transform it (convenience for training split)."""
+        return self.fit_array(X).transform_array(X)
+
+    def inverse_transform_array(self, X: np.ndarray) -> np.ndarray:
+        """Undo normalization on a (N, F) array. Returns float32."""
+        self._check_fitted()
+        if not hasattr(self, '_arr_stats'):
+            raise RuntimeError("Fitted with DataFrame API — use inverse_transform() instead.")
+
+        X = X.astype(np.float32)
+        if self.method == "zscore":
+            mean = np.array([self._arr_stats[i]["mean"] for i in range(self._n_features)],
+                            dtype=np.float32)
+            std  = np.array([self._arr_stats[i]["std"]  for i in range(self._n_features)],
+                            dtype=np.float32)
+            return X * std + mean
+        else:
+            lo  = np.array([self._arr_stats[i]["min"]   for i in range(self._n_features)],
+                           dtype=np.float32)
+            rng = np.array([self._arr_stats[i]["range"] for i in range(self._n_features)],
+                           dtype=np.float32)
+            return X * rng + lo
+
     def inverse_transform(self, df: pd.DataFrame) -> pd.DataFrame:
         """Undo normalization; returns values in the original sensor scale."""
         self._check_fitted()
@@ -147,6 +238,9 @@ class HAISensorNormalizer:
             "sensor_cols": self.sensor_cols,
             "stats": self._stats,
         }
+        if hasattr(self, '_arr_stats'):
+            payload["arr_stats"]   = {str(k): v for k, v in self._arr_stats.items()}
+            payload["n_features"]  = self._n_features
         Path(path).write_text(json.dumps(payload, indent=2))
 
     @classmethod
@@ -155,6 +249,9 @@ class HAISensorNormalizer:
         payload = json.loads(Path(path).read_text())
         obj = cls(method=payload["method"], sensor_cols=payload["sensor_cols"])
         obj._stats = payload["stats"]
+        if "arr_stats" in payload:
+            obj._arr_stats   = {int(k): v for k, v in payload["arr_stats"].items()}
+            obj._n_features  = payload["n_features"]
         obj._fitted = True
         return obj
 
