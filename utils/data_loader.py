@@ -77,6 +77,33 @@ def load_merged(split: str, num: int) -> pd.DataFrame:
         suffixes=("", "_hiend"),
     )
 
+    # Load separate label file for test splits (labels are not in the sensor CSVs)
+    if split == "test" and "attack" not in merged.columns:
+        label_path = os.path.join(HIEND_DIR, f"label-{split}{num}.csv")
+        if os.path.exists(label_path):
+            labels = pd.read_csv(label_path)
+            labels.rename(columns={labels.columns[0]: "timestamp"}, inplace=True)
+            labels["timestamp"] = pd.to_datetime(labels["timestamp"])
+            labels = labels.drop_duplicates(subset="timestamp", keep="first")
+            # find the label column (binary 0/1)
+            label_col = next(
+                (c for c in labels.columns if c != "timestamp"), None
+            )
+            if label_col:
+                merged = pd.merge(merged, labels[["timestamp", label_col]],
+                                  on="timestamp", how="left")
+                merged.rename(columns={label_col: "attack"}, inplace=True)
+                merged["attack"] = merged["attack"].fillna(0).astype(int)
+                print(f"  └─ loaded labels from label-{split}{num}.csv  "
+                      f"(attacks: {merged['attack'].sum()})")
+        else:
+            print(f"  └─ WARNING: label file not found: {label_path}")
+            merged["attack"] = 0
+
+    # Train files are fully benign — add attack=0 if not present
+    if "attack" not in merged.columns:
+        merged["attack"] = 0
+
     print(
         f"[{split}{num}] merged: {len(merged)} rows, {len(merged.columns)} cols "
         f"(dropped {len(cols_to_drop)} duplicate HAI cols)"

@@ -11,20 +11,16 @@ Pipeline order:
 │ Digital Twin                     │                                      │
 │   Transformer Seq2Seq (primary)  │ twin()                               │
 │   LSTM Seq2Seq (baseline)        │ twin()                               │
-│   Mamba/S4 (future)              │ twin()                               │
-│   Merging girl (Modhi)           │ twin()                               │
+│   Transformer+lstm (mudhi)       │ twin()                               │
 ├──────────────────────────────────┼──────────────────────────────────────┤
 │ Attack Generator                 │                                      │
 │   Diffusion (primary)            │ generate()                           │
 │   VAE (baseline)                 │ generate()                           │
 │   LSTM-AE generator (alt)        │ generate()                           │
-│   DoppelGANger (future)          │ generate()                           │
 ├──────────────────────────────────┼──────────────────────────────────────┤
 │ Anomaly Detection                │                                      │
 │   ISO Forest (primary)           │ detect_errors(errors)                │
 │   Random Forest (future)         │ detect_errors(errors)                │
-│   Threshold + MSE (ablation)     │ detect_errors(errors)                │
-│   LSTM-AE baseline / PD2         │ detect()                             │
 └──────────────────────────────────┴──────────────────────────────────────┘
 
 NOTE: detect_errors() receives reconstruction errors from the trained
@@ -140,19 +136,23 @@ def twin(
     arr_val      = _to_array(train_dfs[3])
     X_val, Y_val = _seq2seq_windows(arr_val, input_len, target_len, stride)
 
-    # ── Test: test1 + test2 (all rows, keep labels) ───────────────────────────
-    test_all = pd.concat(test_dfs, ignore_index=True)
-    arr_test = norm.transform(test_all)[cols].values.astype(np.float32)
-    y_labels = test_all["attack"].values.astype(np.int32)
-
-    X_test, Y_test = _seq2seq_windows(arr_test, input_len, target_len, stride)
-
-    # align labels to windows (label = any attack in the full span)
+    # ── Test: window each file separately (no gap crossing), then concat ────────
     span = input_len + target_len
-    starts = range(0, len(y_labels) - span + 1, stride)
-    y_test_labels = np.array(
-        [int(y_labels[s : s + span].any()) for s in starts], dtype=np.int32
-    )
+    X_test_parts, Y_test_parts, y_test_parts = [], [], []
+    for df in test_dfs:
+        arr  = norm.transform(df)[cols].values.astype(np.float32)
+        y_raw = df["attack"].values.astype(np.int32)
+        Xi, Yi = _seq2seq_windows(arr, input_len, target_len, stride)
+        starts = range(0, len(arr) - span + 1, stride)
+        yi = np.array([int(y_raw[s : s + span].any()) for s in starts],
+                      dtype=np.int32)
+        X_test_parts.append(Xi)
+        Y_test_parts.append(Yi)
+        y_test_parts.append(yi)
+    X_test        = np.concatenate(X_test_parts, axis=0)
+    Y_test        = np.concatenate(Y_test_parts, axis=0)
+    y_test_labels = np.concatenate(y_test_parts, axis=0)
+    del X_test_parts, Y_test_parts, y_test_parts
 
     print("Digital Twin data ready:")
     print(f"  X_train {X_train.shape}  Y_train {Y_train.shape}")
