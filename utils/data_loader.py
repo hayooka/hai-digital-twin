@@ -1,8 +1,8 @@
 import os
 import pandas as pd
 
-HAI_DIR   = "C:/Users/farah/OneDrive/Desktop/AI_project/hai-23.05"
-HIEND_DIR = "C:/Users/farah/OneDrive/Desktop/AI_project/haiend-23.05"
+HAI_DIR   = os.environ.get("HAI_DIR",   "C:/Users/farah/OneDrive/Desktop/AI_project/hai-23.05")
+HIEND_DIR = os.environ.get("HIEND_DIR", "C:/Users/farah/OneDrive/Desktop/AI_project/haiend-23.05")
 
 # HAI columns that are duplicated in HIEND (confirmed from dataset documentation).
 # HIEND version takes priority — these HAI columns are dropped after merging.

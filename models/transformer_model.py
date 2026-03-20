@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))  # add project root to pat
 from utils.prep import twin
 
 # ── Data ──────────────────────────────────────────────────────────────────────
-data    = twin(input_len=60, target_len=180, stride=180)  # stride=1 → OOM; 180=non-overlapping
+data    = twin(input_len=60, target_len=180, stride=60)   # stride=1 → OOM; 60=3× more data than stride=180
 X_train = data["X_train"]        # (N, 60,  277)  encoder input
 Y_train = data["Y_train"]        # (N, 180, 277)  decoder target
 X_val   = data["X_val"]          # (M, 60,  277)
@@ -30,10 +30,10 @@ norm    = data["norm"]           # pass to ISO Forest later
 
 # ── Hyperparameters ───────────────────────────────────────────────────────────
 N_FEAT   = X_train.shape[2]   # 277
-D_MODEL  = 128
+D_MODEL  = 256
 N_HEADS  = 8
-N_LAYERS = 3
-FFN_DIM  = 512
+N_LAYERS = 4
+FFN_DIM  = 1024
 DROPOUT  = 0.1
 EPOCHS   = 50
 BATCH    = 64
@@ -217,7 +217,10 @@ def score_windows(model, X, Y, batch=BATCH):
             pred   = model(src, dec_in)
             mse    = ((pred - tgt) ** 2).mean(dim=(1, 2))   # (B,)
             scores.append(mse.cpu().numpy())
-    return np.concatenate(scores)   # (N,)
+    scores = np.concatenate(scores)                   # (N,)
+    scores = np.nan_to_num(scores, nan=0.0, posinf=0.0)  # remove NaN/Inf
+    p999   = np.percentile(scores, 99.9)
+    return np.clip(scores, 0, p999)                   # clip extreme outliers
 
 
 def evaluate(model, X_val, Y_val, X_test, Y_test, y_test):
