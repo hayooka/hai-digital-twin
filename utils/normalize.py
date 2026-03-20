@@ -26,7 +26,8 @@ N_FEATURES = 277
 N_SENSORS  = N_FEATURES   # backward-compat alias
 
 # Minimum allowed std before clamping — prevents blow-up on constant channels
-MIN_STD = 1e-6
+# 1e-6 is too small: sensors constant in training but active in test → (val/1e-6) = millions
+MIN_STD = 0.01
 
 
 class HAISensorNormalizer:
