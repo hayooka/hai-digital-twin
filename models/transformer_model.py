@@ -151,7 +151,7 @@ def train(model, X_tr, Y_tr, X_v, Y_v,
           epochs=EPOCHS, batch=BATCH, lr=LR):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, patience=5, factor=0.5, verbose=True)
+        optimizer, patience=5, factor=0.5)
     criterion = nn.MSELoss()
     N = len(X_tr)
     best_val, best_state = float("inf"), None
