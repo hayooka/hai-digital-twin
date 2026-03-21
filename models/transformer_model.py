@@ -133,12 +133,13 @@ class TransformerSeq2Seq(nn.Module):
         Per-sensor MSE errors for each window → (N, 277).
         Pass results to ISO Forest for anomaly detection.
         """
+        device = next(self.parameters()).device
         self.eval()
         errors = []
         with torch.no_grad():
             for i in range(0, len(X), batch_size):
-                src  = torch.tensor(X[i:i+batch_size]).float()
-                tgt  = torch.tensor(Y[i:i+batch_size]).float()
+                src  = torch.tensor(X[i:i+batch_size]).float().to(device)
+                tgt  = torch.tensor(Y[i:i+batch_size]).float().to(device)
                 pred = self.predict(src, dec_len=tgt.size(1))
                 err  = ((pred - tgt) ** 2).mean(dim=1)  # (B, 277)
                 errors.append(err.cpu().numpy())
@@ -149,6 +150,7 @@ class TransformerSeq2Seq(nn.Module):
 
 def train(model, X_tr, Y_tr, X_v, Y_v,
           epochs=EPOCHS, batch=BATCH, lr=LR):
+    device = next(model.parameters()).device
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, patience=5, factor=0.5)
@@ -163,8 +165,8 @@ def train(model, X_tr, Y_tr, X_v, Y_v,
         total = 0.0
         for i in range(0, N, batch):
             b      = idx[i:i+batch]
-            src    = torch.tensor(X_tr[b]).float()
-            tgt    = torch.tensor(Y_tr[b]).float()
+            src    = torch.tensor(X_tr[b]).float().to(device)
+            tgt    = torch.tensor(Y_tr[b]).float().to(device)
             # teacher forcing: decoder sees [last encoder step, Y[0..T-2]]
             dec_in = torch.cat([src[:, -1:, :], tgt[:, :-1, :]], dim=1)
             loss   = criterion(model(src, dec_in), tgt)
@@ -179,8 +181,8 @@ def train(model, X_tr, Y_tr, X_v, Y_v,
         val_loss, n_b = 0.0, 0
         with torch.no_grad():
             for i in range(0, len(X_v), batch):
-                src    = torch.tensor(X_v[i:i+batch]).float()
-                tgt    = torch.tensor(Y_v[i:i+batch]).float()
+                src    = torch.tensor(X_v[i:i+batch]).float().to(device)
+                tgt    = torch.tensor(Y_v[i:i+batch]).float().to(device)
                 dec_in = torch.cat([src[:, -1:, :], tgt[:, :-1, :]], dim=1)
                 val_loss += criterion(model(src, dec_in), tgt).item()
                 n_b += 1
@@ -207,12 +209,13 @@ def score_windows(model, X, Y, batch=BATCH):
     Scalar MSE per window using teacher forcing (fast).
     Returns (N,) anomaly scores — higher = more anomalous.
     """
+    device = next(model.parameters()).device
     model.eval()
     scores = []
     with torch.no_grad():
         for i in range(0, len(X), batch):
-            src    = torch.tensor(X[i:i+batch]).float()
-            tgt    = torch.tensor(Y[i:i+batch]).float()
+            src    = torch.tensor(X[i:i+batch]).float().to(device)
+            tgt    = torch.tensor(Y[i:i+batch]).float().to(device)
             dec_in = torch.cat([src[:, -1:, :], tgt[:, :-1, :]], dim=1)
             pred   = model(src, dec_in)
             mse    = ((pred - tgt) ** 2).mean(dim=(1, 2))   # (B,)
@@ -270,11 +273,14 @@ def evaluate(model, X_val, Y_val, X_test, Y_test, y_test):
 if __name__ == "__main__":
     import json
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
     # ── 1. Build model ────────────────────────────────────────────────────────
     model = TransformerSeq2Seq(
         n_features=N_FEAT, d_model=D_MODEL, n_heads=N_HEADS,
         n_layers=N_LAYERS, ffn_dim=FFN_DIM, dropout=DROPOUT,
-    )
+    ).to(device)
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     # ── 2. Train ──────────────────────────────────────────────────────────────
