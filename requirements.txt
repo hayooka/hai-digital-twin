@@ -1,0 +1,17 @@
+# Core
+numpy<2.0
+pandas
+scikit-learn
+
+# ─────────────────────────────────────────────
+# PyTorch — choose ONE option based on your PC:
+# ─────────────────────────────────────────────
+
+# Option 1: GPU — RTX 50 series (CUDA 12.8) e.g. RTX 5050
+# pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+
+# Option 2: GPU — RTX 30/40 series (CUDA 11.8)
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+# Option 3: CPU only (no GPU)
+# pip install torch torchvision torchaudio

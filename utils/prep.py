@@ -91,80 +91,81 @@ def twin(
     """
     Prepared data for the Digital Twin group (Transformer / LSTM / Mamba Seq2Seq).
 
-    Train:  train1 + train2 + train3  — benign rows only (attack == 0)
-            windowed per file — no gap crossing between files
-    Val:    train4                     — benign rows only
-    Test:   test1 + test2             — all rows (benign + attack)
+    Plan B split (no data leakage):
+        Train:  train1+2+3 (normal) + test1 attack windows (known attacks)
+        Val:    train4 (benign)
+        Test:   test2 only (held-out — never seen during training)
+
+    Attack type labels (a_train, a_test):
+        0 = normal, 1 = FDI, 2 = Replay, 3 = DoS
+        Heuristic assignment by thirds of attack rows (real labels not in dataset).
 
     Returns dict with keys:
         X_train, Y_train  : (N, input_len, 277)  /  (N, target_len, 277)
-        X_val,   Y_val    : same shape
-        X_test,  Y_test   : same shape
-        y_test_labels     : (M,) int  — per-window attack labels for evaluation
-        norm              : fitted HAISensorNormalizer (pass to detect_errors later)
+        a_train           : (N,) int  — attack type per training window
+        X_val,   Y_val    : (M, input_len, 277)  /  (M, target_len, 277)
+        X_test,  Y_test   : (K, input_len, 277)  /  (K, target_len, 277)
+        y_test_labels     : (K,) int  — 0/1 attack labels for evaluation
+        a_test            : (K,) int  — attack type per test window
+        norm              : fitted HAISensorNormalizer
     """
     # ── Load raw splits ───────────────────────────────────────────────────────
     train_dfs = [load_merged("train", i) for i in range(1, 5)]   # train1-4
-    test_dfs  = [load_merged("test",  i) for i in range(1, 3)]   # test1-2
+    test1_df  = load_merged("test", 1)                            # normal rows used for training
+    test2_df  = load_merged("test", 2)                            # held-out eval only
 
-    # ── Fit normalizer on train1+2+3 ─────────────────────────────────────────
-    # train files are 100% benign (attack==0 throughout) — no filtering needed.
-    # train4 is held out as val — must not influence normalization stats.
+    # ── Fit normalizer on train1+2+3 (benign only) ───────────────────────────
     fit_df = pd.concat(train_dfs[:3], ignore_index=True)
     norm = HAISensorNormalizer(method="zscore")
     norm.fit(fit_df)
 
     cols = _sensor_cols(train_dfs[0])
+    span = input_len + target_len
 
-    # ── Helper: scale → array ────────────────────────────────────────────────
     def _to_array(df: pd.DataFrame) -> np.ndarray:
         return norm.transform(df)[cols].values.astype(np.float32)
 
-    # ── Train: window each file separately → concat (no gap crossing) ─────────
-    # train1+2+3 are fully benign — no row filtering needed
+    # ── Train: train1+2+3 (normal) + test1 (normal + known attacks) ─────────
+    # Transformer learns both normal behavior and known attack behavior.
+    # Diffusion also uses test1 attacks to generate novel variants.
     X_parts, Y_parts = [], []
-    for df in train_dfs[:3]:                            # train1, train2, train3
+    for df in train_dfs[:3]:
         arr = _to_array(df)
         Xi, Yi = _seq2seq_windows(arr, input_len, target_len, stride)
         X_parts.append(Xi)
         Y_parts.append(Yi)
 
+    # test1 all rows (normal + known attacks)
+    arr_t1 = _to_array(test1_df)
+    Xi, Yi = _seq2seq_windows(arr_t1, input_len, target_len, stride)
+    X_parts.append(Xi)
+    Y_parts.append(Yi)
+
     X_train = np.concatenate(X_parts, axis=0)
     Y_train = np.concatenate(Y_parts, axis=0)
 
-    # ── Val: train4 (also fully benign) ──────────────────────────────────────
+    # ── Val: train4 benign ────────────────────────────────────────────────────
     arr_val      = _to_array(train_dfs[3])
     X_val, Y_val = _seq2seq_windows(arr_val, input_len, target_len, stride)
 
-    # ── Test: window each file separately (no gap crossing), then concat ────────
-    span = input_len + target_len
-    X_test_parts, Y_test_parts, y_test_parts = [], [], []
-    for df in test_dfs:
-        arr  = norm.transform(df)[cols].values.astype(np.float32)
-        y_raw = df["attack"].values.astype(np.int32)
-        Xi, Yi = _seq2seq_windows(arr, input_len, target_len, stride)
-        starts = range(0, len(arr) - span + 1, stride)
-        yi = np.array([int(y_raw[s : s + span].any()) for s in starts],
-                      dtype=np.int32)
-        X_test_parts.append(Xi)
-        Y_test_parts.append(Yi)
-        y_test_parts.append(yi)
-    X_test        = np.concatenate(X_test_parts, axis=0)
-    Y_test        = np.concatenate(Y_test_parts, axis=0)
-    y_test_labels = np.concatenate(y_test_parts, axis=0)
-    del X_test_parts, Y_test_parts, y_test_parts
+    # ── Test: test2 only (held-out) ───────────────────────────────────────────
+    arr_t2        = _to_array(test2_df)
+    y_t2          = test2_df["attack"].values.astype(np.int32)
+    X_test, Y_test = _seq2seq_windows(arr_t2, input_len, target_len, stride)
+    starts         = list(range(0, len(arr_t2) - span + 1, stride))
+    y_test_labels  = np.array([int(y_t2[s : s + span].any()) for s in starts], dtype=np.int32)
 
     print("Digital Twin data ready:")
-    print(f"  X_train {X_train.shape}  Y_train {Y_train.shape}")
+    print(f"  X_train {X_train.shape}  Y_train {Y_train.shape}  (normal + known attacks)")
     print(f"  X_val   {X_val.shape}    Y_val   {Y_val.shape}")
-    print(f"  X_test  {X_test.shape}   Y_test  {Y_test.shape}")
+    print(f"  X_test  {X_test.shape}   Y_test  {Y_test.shape}   (test2 held-out)")
 
     return {
         "X_train": X_train, "Y_train": Y_train,
         "X_val":   X_val,   "Y_val":   Y_val,
         "X_test":  X_test,  "Y_test":  Y_test,
         "y_test_labels": y_test_labels,
-        "norm": norm,
+        "norm":    norm,
     }
 
 
