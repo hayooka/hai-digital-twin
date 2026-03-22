@@ -55,6 +55,10 @@ def load_merged(split: str, num: int) -> pd.DataFrame:
 
     Merges on exact timestamp (inner join — unmatched boundary rows are dropped).
     HAI columns that are duplicated in HIEND are removed; HIEND names take priority.
+
+    # --- HAI-only mode (commented out) ---
+    # To use HAI-23.05 only (86 features instead of 277), comment out the merge
+    # block below and use the HAI-only block instead.
     """
     hai_path   = os.path.join(HAI_DIR,   f"hai-{split}{num}.csv")
     hiend_path = os.path.join(HIEND_DIR, f"end-{split}{num}.csv")
@@ -98,10 +102,10 @@ def load_merged(split: str, num: int) -> pd.DataFrame:
                                   on="timestamp", how="left")
                 merged.rename(columns={label_col: "attack"}, inplace=True)
                 merged["attack"] = merged["attack"].fillna(0).astype(int)
-                print(f"  └─ loaded labels from label-{split}{num}.csv  "
+                print(f"  -> loaded labels from label-{split}{num}.csv  "
                       f"(attacks: {merged['attack'].sum()})")
         else:
-            print(f"  └─ WARNING: label file not found: {label_path}")
+            print(f"  -> WARNING: label file not found: {label_path}")
             merged["attack"] = 0
 
     # Train files are fully benign — add attack=0 if not present
@@ -113,6 +117,28 @@ def load_merged(split: str, num: int) -> pd.DataFrame:
         f"(dropped {len(cols_to_drop)} duplicate HAI cols)"
     )
     return merged
+
+    # --- HAI-only mode (commented out) ---
+    # hai_path = os.path.join(HAI_DIR, f"hai-{split}{num}.csv")
+    # df = pd.read_csv(hai_path)
+    # df.rename(columns={df.columns[0]: "timestamp"}, inplace=True)
+    # df["timestamp"] = pd.to_datetime(df["timestamp"])
+    # if split == "test" and "attack" not in df.columns:
+    #     label_path = os.path.join(HAI_DIR, f"label-{split}{num}.csv")
+    #     if os.path.exists(label_path):
+    #         labels = pd.read_csv(label_path)
+    #         labels.rename(columns={labels.columns[0]: "timestamp"}, inplace=True)
+    #         labels["timestamp"] = pd.to_datetime(labels["timestamp"])
+    #         labels = labels.drop_duplicates(subset="timestamp", keep="first")
+    #         label_col = next((c for c in labels.columns if c != "timestamp"), None)
+    #         if label_col:
+    #             df = pd.merge(df, labels[["timestamp", label_col]],
+    #                           on="timestamp", how="left")
+    #             df.rename(columns={label_col: "attack"}, inplace=True)
+    #             df["attack"] = df["attack"].fillna(0).astype(int)
+    # if "attack" not in df.columns:
+    #     df["attack"] = 0
+    # return df  # 86 sensor features
 
 
 def load_all_train() -> dict[str, pd.DataFrame]:

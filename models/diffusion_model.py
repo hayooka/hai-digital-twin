@@ -27,6 +27,7 @@ from utils.prep import generate
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 N_FEAT       = 277            # number of sensor features
+# N_FEAT     = 86             # HAI-only mode (commented out)
 WINDOW_LEN   = 240            # 60 enc + 180 dec — matches Transformer seq2seq split
 N_ATTACK_TYPES = 3            # FDI=0, Replay=1, DoS=2
 
