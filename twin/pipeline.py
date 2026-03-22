@@ -35,6 +35,7 @@ from utils.prep import twin
 ENC_LEN   = 60
 DEC_LEN   = 180
 N_FEAT    = 277
+# N_FEAT  = 86            # HAI-only mode (commented out)
 D_MODEL   = 256
 N_HEADS   = 8
 N_LAYERS  = 4

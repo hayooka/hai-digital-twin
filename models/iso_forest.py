@@ -35,6 +35,7 @@ META_COLS = {"timestamp", "attack", "label", "attack_p1", "attack_p2", "attack_p
 ENC_LEN  = 60
 DEC_LEN  = 180
 N_FEAT   = 277
+# N_FEAT = 86             # HAI-only mode (commented out)
 D_MODEL  = 256
 N_HEADS  = 8
 N_LAYERS = 4
@@ -78,6 +79,7 @@ model.eval()
 #      → overall severity
 #
 # Combined: (277 + 180 + 4) = 461-dim feature vector per window
+# # HAI-only mode: (86 + 180 + 4) = 270-dim (commented out)
 
 def extract_features(X: np.ndarray, Y: np.ndarray) -> np.ndarray:
     """
