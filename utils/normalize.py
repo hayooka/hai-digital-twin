@@ -90,8 +90,20 @@ class HAISensorNormalizer:
         self.sensor_cols = cols
         self._stats = {}
 
+        # Detect binary columns (only 0/1 values) — skip normalization for these.
+        # Normalizing a binary switch makes no physical sense and distorts the scale.
+        binary_cols = {
+            col for col in cols
+            if df[col].dropna().isin([0, 1]).all() and df[col].nunique() <= 2
+        }
+        if binary_cols:
+            pass  # handled per-column below with binary=True marker
+
         if self.method == "zscore":
             for col in cols:
+                if col in binary_cols:
+                    self._stats[col] = {"binary": True}
+                    continue
                 mean = float(df[col].mean())
                 std  = float(df[col].std(ddof=0))
                 # std clamp fix — prevent blow-up on constant/near-constant channels
@@ -101,6 +113,9 @@ class HAISensorNormalizer:
 
         else:  # minmax
             for col in cols:
+                if col in binary_cols:
+                    self._stats[col] = {"binary": True}
+                    continue
                 lo = float(df[col].min())
                 hi = float(df[col].max())
                 rng = hi - lo
@@ -120,10 +135,14 @@ class HAISensorNormalizer:
         if self.method == "zscore":
             for col in self.sensor_cols:
                 s = self._stats[col]
+                if s.get("binary"):
+                    continue   # leave 0/1 values unchanged
                 out[col] = (df[col] - s["mean"]) / s["std"]
         else:
             for col in self.sensor_cols:
                 s = self._stats[col]
+                if s.get("binary"):
+                    continue
                 out[col] = (df[col] - s["min"]) / s["range"]
 
         return out
@@ -219,10 +238,14 @@ class HAISensorNormalizer:
         if self.method == "zscore":
             for col in self.sensor_cols:
                 s = self._stats[col]
+                if s.get("binary"):
+                    continue   # binary cols were never scaled — nothing to undo
                 out[col] = df[col] * s["std"] + s["mean"]
         else:
             for col in self.sensor_cols:
                 s = self._stats[col]
+                if s.get("binary"):
+                    continue
                 out[col] = df[col] * s["range"] + s["min"]
 
         return out

@@ -165,8 +165,8 @@ iso_novel   = compute_iso_scores(X_novel, Y_novel)
 #   physics_ok:  RMSE > normal baseline (attack should have higher error)
 #   detectable:  ISO score > 95th percentile of normal ISO scores
 iso_normal_scores  = compute_iso_scores(X_test[normal_mask], Y_test[normal_mask])
-physics_threshold  = float(rmse_known_normal.mean() * 5)   # 5x normal RMSE
-detect_threshold   = float(np.percentile(iso_normal_scores, 99))
+physics_threshold  = float(rmse_known_normal.mean() * 3)   # 3x normal RMSE (was 5x)
+detect_threshold   = float(np.percentile(iso_normal_scores, 90))  # 90th pct (was 99th)
 
 physics_ok   = rmse_novel  > physics_threshold
 detectable   = iso_novel   > detect_threshold

@@ -437,7 +437,30 @@ def train_diffusion(
         optimizer, patience=10, factor=0.5
     )
 
-    X_tensor  = torch.tensor(attack_windows, dtype=torch.float32)   # (N, T, F)
+    # ── Augmentation: jitter + scaling ───────────────────────────────────────
+    # 46 original windows → augment to ~4x more training samples.
+    # Jitter: add small Gaussian noise to each window.
+    # Scaling: multiply each window by a random factor near 1.0.
+    # Both preserve the attack structure while increasing data diversity.
+    rng = np.random.default_rng(42)
+    aug_copies = []
+    aug_labels = []
+    for _ in range(3):   # 3 augmented copies → 4x total
+        # Jitter: σ = 1% of each sensor's std across the attack windows
+        sigma = attack_windows.std(axis=(0, 1), keepdims=True) * 0.01
+        jittered = attack_windows + rng.normal(0, sigma, attack_windows.shape)
+        # Scaling: random factor in [0.95, 1.05] per window
+        scale = rng.uniform(0.95, 1.05, (len(attack_windows), 1, 1))
+        augmented = (jittered * scale).astype(np.float32)
+        aug_copies.append(augmented)
+        aug_labels.append(atk_labels.copy())
+
+    attack_aug = np.concatenate([attack_windows] + aug_copies, axis=0)
+    atk_labels_aug = np.concatenate([atk_labels] + aug_labels, axis=0)
+    print(f"[Diffusion] After augmentation: {attack_aug.shape[0]} windows ({len(attack_windows)} original + {len(attack_aug)-len(attack_windows)} augmented)")
+
+    X_tensor       = torch.tensor(attack_aug,    dtype=torch.float32)
+    atk_labels_t   = torch.tensor(atk_labels_aug, dtype=torch.long)
     N         = len(X_tensor)
     best_loss = float("inf")
     best_state = None

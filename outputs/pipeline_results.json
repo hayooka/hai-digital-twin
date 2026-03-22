@@ -1,11 +1,11 @@
 {
-  "rmse_normal": 0.09729009121656418,
-  "rmse_known_attacks": 6.635313034057617,
-  "attack_normal_ratio": 68.20132446289062,
-  "rmse_novel_all": 4.02784538269043,
-  "rmse_novel_filtered": 4.02784538269043,
-  "gap_all": 2.6074676513671875,
-  "gap_filtered": 2.6074676513671875,
+  "rmse_normal": 0.097306028008461,
+  "rmse_known_attacks": 6.620511531829834,
+  "attack_normal_ratio": 68.03804016113281,
+  "rmse_novel_all": 3.99989914894104,
+  "rmse_novel_filtered": 3.99989914894104,
+  "gap_all": 2.620612382888794,
+  "gap_filtered": 2.620612382888794,
   "n_generated": 150,
   "n_kept": 150,
   "acceptance_rate": 1.0
