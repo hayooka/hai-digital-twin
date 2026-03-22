@@ -21,6 +21,7 @@ import json
 import numpy as np
 import torch
 from pathlib import Path
+from sklearn.decomposition import PCA
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import (f1_score, precision_score, recall_score,
                              roc_auc_score, confusion_matrix)
@@ -36,7 +37,7 @@ test_errors  = checkpoint["test_errors"]    # (K, 277)
 y_test       = checkpoint["y_test"]         # (K,)
 
 print("Loaded errors from outputs/transformer_twin.pt")
-print(f"  train_errors {train_errors.shape}  (normal + known attacks)")
+print(f"  train_errors {train_errors.shape}  (normal only)")
 print(f"  test_errors  {test_errors.shape}   (test2 held-out)")
 print(f"  attacks in test: {y_test.sum()} / {len(y_test)}")
 
@@ -52,16 +53,27 @@ train_errors = np.clip(train_errors, 0, cap)
 test_errors  = np.clip(test_errors,  0, cap)
 
 
+# ── PCA: reduce 277-dim errors to 20 dims ─────────────────────────────────────
+# High dimensionality hurts ISO Forest — PCA keeps the most informative variance.
+
+print("\nReducing dimensions with PCA (277 → 20)...")
+pca = PCA(n_components=20, random_state=42)
+train_reduced = pca.fit_transform(train_errors)
+test_reduced  = pca.transform(test_errors)
+print(f"  Explained variance: {pca.explained_variance_ratio_.sum():.3f}")
+
 # ── Train Isolation Forest ─────────────────────────────────────────────────────
 
-print("\nTraining Isolation Forest...")
+# Contamination = actual attack rate in test2 (244/3836 ≈ 6.4%)
+attack_rate = float(y_test.sum()) / len(y_test)
+print(f"\nTraining Isolation Forest (contamination={attack_rate:.3f})...")
 iso = IsolationForest(
     n_estimators=200,
-    contamination=0.05,   # ~5% of windows expected to be anomalous
+    contamination=attack_rate,
     random_state=42,
     n_jobs=-1,
 )
-iso.fit(train_errors)
+iso.fit(train_reduced)
 print("  done.")
 
 
@@ -69,11 +81,11 @@ print("  done.")
 # IsolationForest returns: -1 = anomaly, 1 = normal
 # Convert to: 1 = anomaly (attack), 0 = normal
 
-raw_pred    = iso.predict(test_errors)          # -1 or 1
-pred_labels = (raw_pred == -1).astype(int)      # 1=attack 0=normal
+raw_pred    = iso.predict(test_reduced)          # -1 or 1
+pred_labels = (raw_pred == -1).astype(int)       # 1=attack 0=normal
 
 # Anomaly score: lower = more anomalous (negate for ROC-AUC)
-scores      = -iso.score_samples(test_errors)   # higher = more anomalous
+scores      = -iso.score_samples(test_reduced)   # higher = more anomalous
 
 
 # ── Metrics ───────────────────────────────────────────────────────────────────

@@ -1,9 +1,9 @@
 """
 Transformer Seq2Seq — Digital Twin (primary)
 
-Data:   train1+2+3 (benign) + test1 normal rows → windowed per file
-        Val:  train4 (benign)
-        Test: test2 only (held-out)
+Data:   train1+2+3 (normal only) → windowed per file
+        Val:  train4 (normal only)
+        Test: test2 only (held-out — never seen during training)
 Shape:  X (N, 60, 277) → Y (N, 180, 277)
 
 No attack-type labels used — model learns purely from sensor values.

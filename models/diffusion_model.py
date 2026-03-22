@@ -22,12 +22,12 @@ import torch.nn.functional as F
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))  # add project root to path
-from utils.prep import twin
+from utils.prep import generate
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 N_FEAT       = 277            # number of sensor features
-WINDOW_LEN   = 60             # timesteps per window (matches Transformer enc input)
+WINDOW_LEN   = 240            # 60 enc + 180 dec — matches Transformer seq2seq split
 N_ATTACK_TYPES = 3            # FDI=0, Replay=1, DoS=2
 
 # DDPM schedule
@@ -372,7 +372,7 @@ def _extract_physics_bounds(norm) -> tuple[np.ndarray, np.ndarray]:
 # ── Training function ──────────────────────────────────────────────────────────
 
 def train_diffusion(
-    test_data: dict,
+    gen_data:   dict,
     norm,
     window_len:  int   = WINDOW_LEN,
     epochs:      int   = EPOCHS,
@@ -380,17 +380,16 @@ def train_diffusion(
     lr:          float = LR,
 ) -> ConditionalDiffusion:
     """
-    Train ConditionalDiffusion on attack windows extracted from test_data.
+    Train ConditionalDiffusion on test1 attack windows from generate().
 
     Parameters
     ----------
-    test_data : dict returned by twin() — must contain X_test and y_test_labels.
-                Attack windows are those where y_test_labels == 1.
-    norm      : fitted HAISensorNormalizer — used to derive physics bounds.
-    window_len: length of each window (should match X_test window dimension).
-    epochs    : number of training epochs.
-    batch     : mini-batch size.
-    lr        : Adam learning rate.
+    gen_data   : dict returned by generate() — contains attack_windows.
+    norm       : fitted HAISensorNormalizer — used to derive physics bounds.
+    window_len : length of each window (240 = 60 enc + 180 dec).
+    epochs     : number of training epochs.
+    batch      : mini-batch size.
+    lr         : Adam learning rate.
 
     Returns
     -------
@@ -399,12 +398,8 @@ def train_diffusion(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[Diffusion] Using device: {device}")
 
-    # ── Extract attack windows ────────────────────────────────────────────────
-    X_test  = test_data["X_test"]          # (K, window_len, 277)
-    y_test  = test_data["y_test_labels"]   # (K,)  0/1
-
-    attack_mask    = y_test == 1
-    attack_windows = X_test[attack_mask]   # (N_atk, window_len, 277)
+    # ── Extract attack windows from generate() ────────────────────────────────
+    attack_windows = gen_data["attack_windows"]   # (N_atk, window_len, 277)
     print(f"[Diffusion] Attack windows: {attack_windows.shape}")
 
     if len(attack_windows) == 0:
@@ -576,10 +571,10 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
 
     # ── 1. Load data ──────────────────────────────────────────────────────────
-    # twin() provides X_test with attack labels; we train the diffusion model
-    # exclusively on the attack windows (y_test_labels == 1).
-    print("\nLoading data via twin()...")
-    data = twin(input_len=WINDOW_LEN, target_len=180, stride=60)
+    # generate() loads test1 attack windows (240 steps = 60 enc + 180 dec).
+    # test2 is held-out and never touched here.
+    print("\nLoading attack windows via generate()...")
+    data = generate(window_len=WINDOW_LEN, stride=60)
     norm = data["norm"]
 
     # ── 2. Train diffusion model ──────────────────────────────────────────────
@@ -604,6 +599,7 @@ if __name__ == "__main__":
     attack_type_labels = torch.tensor(all_type_labels, dtype=torch.long)
 
     print(f"\nTotal generated windows: {generated_windows.shape}")
+    print(f"  Each window: {WINDOW_LEN} steps (first 60=enc input, last 180=dec target)")
 
     # ── 4. Save outputs ───────────────────────────────────────────────────────
     save_path = Path("outputs/diffusion_attacks.pt")
