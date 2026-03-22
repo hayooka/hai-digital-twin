@@ -1,10 +1,13 @@
 """
 Transformer Seq2Seq — Digital Twin (primary)
 
-Data:   train1+2+3 (benign) → windowed per file, no gap crossing
-        Val:  train4 (benign)
-        Test: test1+2 (all rows)
+Data:   train1+2+3 (normal only) → windowed per file
+        Val:  train4 (normal only)
+        Test: test2 only (held-out — never seen during training)
 Shape:  X (N, 60, 277) → Y (N, 180, 277)
+
+No attack-type labels used — model learns purely from sensor values.
+High reconstruction error on test2 = anomaly signal.
 """
 
 import sys
@@ -19,11 +22,11 @@ from utils.prep import twin
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 data    = twin(input_len=60, target_len=180, stride=60)   # stride=1 → OOM; 60=3× more data than stride=180
-X_train = data["X_train"]        # (N, 60,  277)  encoder input
+X_train = data["X_train"]        # (N, 60,  277)  encoder input  — normal only
 Y_train = data["Y_train"]        # (N, 180, 277)  decoder target
 X_val   = data["X_val"]          # (M, 60,  277)
 Y_val   = data["Y_val"]          # (M, 180, 277)
-X_test  = data["X_test"]         # (K, 60,  277)
+X_test  = data["X_test"]         # (K, 60,  277)  — test2 only
 Y_test  = data["Y_test"]         # (K, 180, 277)
 y_test  = data["y_test_labels"]  # (K,)  0=normal 1=attack
 norm    = data["norm"]           # pass to ISO Forest later
@@ -70,6 +73,9 @@ class TransformerSeq2Seq(nn.Module):
     Encoder: processes 60 past timesteps → context (memory)
     Decoder: predicts 180 future timesteps from context
     Loss:    MSE on sensor values
+
+    No attack-type conditioning — model learns purely from sensor values.
+    Anomaly detection via reconstruction error: high error = attack.
     """
     def __init__(self, n_features=277, d_model=128, n_heads=8,
                  n_layers=3, ffn_dim=512, dropout=0.1):
@@ -133,12 +139,13 @@ class TransformerSeq2Seq(nn.Module):
         Per-sensor MSE errors for each window → (N, 277).
         Pass results to ISO Forest for anomaly detection.
         """
+        device = next(self.parameters()).device
         self.eval()
         errors = []
         with torch.no_grad():
             for i in range(0, len(X), batch_size):
-                src  = torch.tensor(X[i:i+batch_size]).float()
-                tgt  = torch.tensor(Y[i:i+batch_size]).float()
+                src  = torch.tensor(X[i:i+batch_size]).float().to(device)
+                tgt  = torch.tensor(Y[i:i+batch_size]).float().to(device)
                 pred = self.predict(src, dec_len=tgt.size(1))
                 err  = ((pred - tgt) ** 2).mean(dim=1)  # (B, 277)
                 errors.append(err.cpu().numpy())
@@ -149,6 +156,7 @@ class TransformerSeq2Seq(nn.Module):
 
 def train(model, X_tr, Y_tr, X_v, Y_v,
           epochs=EPOCHS, batch=BATCH, lr=LR):
+    device = next(model.parameters()).device
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, patience=5, factor=0.5)
@@ -163,8 +171,8 @@ def train(model, X_tr, Y_tr, X_v, Y_v,
         total = 0.0
         for i in range(0, N, batch):
             b      = idx[i:i+batch]
-            src    = torch.tensor(X_tr[b]).float()
-            tgt    = torch.tensor(Y_tr[b]).float()
+            src    = torch.tensor(X_tr[b]).float().to(device)
+            tgt    = torch.tensor(Y_tr[b]).float().to(device)
             # teacher forcing: decoder sees [last encoder step, Y[0..T-2]]
             dec_in = torch.cat([src[:, -1:, :], tgt[:, :-1, :]], dim=1)
             loss   = criterion(model(src, dec_in), tgt)
@@ -179,8 +187,8 @@ def train(model, X_tr, Y_tr, X_v, Y_v,
         val_loss, n_b = 0.0, 0
         with torch.no_grad():
             for i in range(0, len(X_v), batch):
-                src    = torch.tensor(X_v[i:i+batch]).float()
-                tgt    = torch.tensor(Y_v[i:i+batch]).float()
+                src    = torch.tensor(X_v[i:i+batch]).float().to(device)
+                tgt    = torch.tensor(Y_v[i:i+batch]).float().to(device)
                 dec_in = torch.cat([src[:, -1:, :], tgt[:, :-1, :]], dim=1)
                 val_loss += criterion(model(src, dec_in), tgt).item()
                 n_b += 1
@@ -202,67 +210,56 @@ def train(model, X_tr, Y_tr, X_v, Y_v,
 
 # ── Evaluation ────────────────────────────────────────────────────────────────
 
-def score_windows(model, X, Y, batch=BATCH):
-    """
-    Scalar MSE per window using teacher forcing (fast).
-    Returns (N,) anomaly scores — higher = more anomalous.
-    """
-    model.eval()
-    scores = []
-    with torch.no_grad():
-        for i in range(0, len(X), batch):
-            src    = torch.tensor(X[i:i+batch]).float()
-            tgt    = torch.tensor(Y[i:i+batch]).float()
-            dec_in = torch.cat([src[:, -1:, :], tgt[:, :-1, :]], dim=1)
-            pred   = model(src, dec_in)
-            mse    = ((pred - tgt) ** 2).mean(dim=(1, 2))   # (B,)
-            scores.append(mse.cpu().numpy())
-    scores = np.concatenate(scores)                   # (N,)
-    scores = np.nan_to_num(scores, nan=0.0, posinf=0.0)  # remove NaN/Inf
-    p999   = np.percentile(scores, 99.9)
-    return np.clip(scores, 0, p999)                   # clip extreme outliers
-
 
 def evaluate(model, X_val, Y_val, X_test, Y_test, y_test):
-    from sklearn.metrics import (f1_score, precision_score, recall_score,
-                                 roc_auc_score, confusion_matrix)
+    """
+    Evaluates the Transformer as a SIMULATOR — using RMSE only.
+    F1/ROC-AUC belong to ISO Forest, not here.
 
-    print("\nScoring windows...")
-    val_scores  = score_windows(model, X_val,  Y_val)    # benign only → sets normal baseline
-    test_scores = score_windows(model, X_test, Y_test)   # mix of normal + attack
+    Reports:
+        RMSE on val (normal)         → baseline simulator accuracy
+        RMSE on test normal windows  → simulator on unseen normal
+        RMSE on test attack windows  → simulator on known attacks
+    """
+    device = next(model.parameters()).device
+    model.eval()
 
-    print(f"  val  scores: mean={val_scores.mean():.5f}  p95={np.percentile(val_scores, 95):.5f}")
-    print(f"  test scores: mean={test_scores.mean():.5f}  p95={np.percentile(test_scores, 95):.5f}")
+    def _rmse(X, Y, mask=None):
+        errs = []
+        with torch.no_grad():
+            for i in range(0, len(X), BATCH):
+                src    = torch.tensor(X[i:i+BATCH]).float().to(device)
+                tgt    = torch.tensor(Y[i:i+BATCH]).float().to(device)
+                dec_in = torch.cat([src[:, -1:, :], tgt[:, :-1, :]], dim=1)
+                pred   = model(src, dec_in)
+                mse    = ((pred - tgt) ** 2).mean(dim=(1, 2)).cpu().numpy()
+                errs.append(mse)
+        errs = np.concatenate(errs)
+        if mask is not None:
+            errs = errs[mask]
+        return float(np.sqrt(np.mean(errs)))
 
-    # ── Threshold from val_scores only (no data leakage) ─────────────────────
-    # val is benign-only → 95th percentile = upper bound of normal reconstruction error
-    best_thr = float(np.percentile(val_scores, 95))
+    normal_mask = (y_test == 0)
+    attack_mask = (y_test == 1)
 
-    # ── Final metrics ─────────────────────────────────────────────────────────
-    pred = (test_scores >= best_thr).astype(int)
-    f1   = f1_score(y_test,  pred, zero_division=0)
-    pre  = precision_score(y_test, pred, zero_division=0)
-    rec  = recall_score(y_test,  pred, zero_division=0)
-    try:   auc = roc_auc_score(y_test, test_scores)
-    except: auc = float("nan")
-    tn, fp, fn, tp = confusion_matrix(y_test, pred, labels=[0, 1]).ravel()
+    rmse_val    = _rmse(X_val,  Y_val)                      # normal baseline
+    rmse_normal = _rmse(X_test, Y_test, mask=normal_mask)   # test normal
+    rmse_attack = _rmse(X_test, Y_test, mask=attack_mask)   # test known attacks
 
     print("\n" + "=" * 50)
-    print("  TRANSFORMER SEQ2SEQ — EVALUATION RESULTS")
+    print("  TRANSFORMER SEQ2SEQ — SIMULATOR EVALUATION")
     print("=" * 50)
-    print(f"  F1        = {f1:.4f}")
-    print(f"  Precision = {pre:.4f}")
-    print(f"  Recall    = {rec:.4f}")
-    print(f"  ROC-AUC   = {auc:.4f}")
-    print(f"  Threshold = {best_thr:.6f}")
-    print(f"  TP={tp}  FP={fp}  TN={tn}  FN={fn}")
+    print(f"  RMSE val    (normal)         = {rmse_val:.5f}")
+    print(f"  RMSE test   (normal windows) = {rmse_normal:.5f}")
+    print(f"  RMSE test   (attack windows) = {rmse_attack:.5f}")
+    print(f"  Attack/Normal ratio          = {rmse_attack/rmse_normal:.2f}x")
+    print("  → Generalization Gap will be computed after Diffusion")
     print("=" * 50)
 
     return {
-        "f1": float(f1), "precision": float(pre), "recall": float(rec),
-        "roc_auc": float(auc), "threshold": best_thr,
-        "tp": int(tp), "fp": int(fp), "tn": int(tn), "fn": int(fn),
-        "val_scores": val_scores, "test_scores": test_scores,
+        "rmse_val":    rmse_val,
+        "rmse_normal": rmse_normal,
+        "rmse_attack": rmse_attack,
     }
 
 
@@ -270,11 +267,14 @@ def evaluate(model, X_val, Y_val, X_test, Y_test, y_test):
 if __name__ == "__main__":
     import json
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
     # ── 1. Build model ────────────────────────────────────────────────────────
     model = TransformerSeq2Seq(
         n_features=N_FEAT, d_model=D_MODEL, n_heads=N_HEADS,
         n_layers=N_LAYERS, ffn_dim=FFN_DIM, dropout=DROPOUT,
-    )
+    ).to(device)
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
     # ── 2. Train ──────────────────────────────────────────────────────────────
@@ -292,17 +292,16 @@ if __name__ == "__main__":
 
     # ── 5. Save ───────────────────────────────────────────────────────────────
     torch.save({
-        "model_state":   model.state_dict(),
-        "train_errors":  train_errors,
-        "test_errors":   test_errors,
-        "y_test":        y_test,
-        "metrics":       results,
+        "model_state":  model.state_dict(),
+        "train_errors": train_errors,
+        "test_errors":  test_errors,
+        "y_test":       y_test,
+        "metrics":      results,
     }, "outputs/transformer_twin.pt")
 
     with open("outputs/transformer_metrics.json", "w") as f:
-        json.dump({k: v for k, v in results.items()
-                   if not isinstance(v, np.ndarray)}, f, indent=2)
+        json.dump(results, f, indent=2)
 
     print("\nSaved:")
     print("  outputs/transformer_twin.pt      (model + errors)")
-    print("  outputs/transformer_metrics.json (evaluation results)")
+    print("  outputs/transformer_metrics.json (RMSE metrics)")

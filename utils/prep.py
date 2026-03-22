@@ -91,39 +91,46 @@ def twin(
     """
     Prepared data for the Digital Twin group (Transformer / LSTM / Mamba Seq2Seq).
 
-    Train:  train1 + train2 + train3  — benign rows only (attack == 0)
-            windowed per file — no gap crossing between files
-    Val:    train4                     — benign rows only
-    Test:   test1 + test2             — all rows (benign + attack)
+    Plan B split (no data leakage):
+        Train:  train1+2+3 (normal) + test1 attack windows (known attacks)
+        Val:    train4 (benign)
+        Test:   test2 only (held-out — never seen during training)
+
+    Attack type labels (a_train, a_test):
+        0 = normal, 1 = FDI, 2 = Replay, 3 = DoS
+        Heuristic assignment by thirds of attack rows (real labels not in dataset).
 
     Returns dict with keys:
         X_train, Y_train  : (N, input_len, 277)  /  (N, target_len, 277)
-        X_val,   Y_val    : same shape
-        X_test,  Y_test   : same shape
-        y_test_labels     : (M,) int  — per-window attack labels for evaluation
-        norm              : fitted HAISensorNormalizer (pass to detect_errors later)
+        a_train           : (N,) int  — attack type per training window
+        X_val,   Y_val    : (M, input_len, 277)  /  (M, target_len, 277)
+        X_test,  Y_test   : (K, input_len, 277)  /  (K, target_len, 277)
+        y_test_labels     : (K,) int  — 0/1 attack labels for evaluation
+        a_test            : (K,) int  — attack type per test window
+        norm              : fitted HAISensorNormalizer
     """
     # ── Load raw splits ───────────────────────────────────────────────────────
     train_dfs = [load_merged("train", i) for i in range(1, 5)]   # train1-4
-    test_dfs  = [load_merged("test",  i) for i in range(1, 3)]   # test1-2
+    test1_df  = load_merged("test", 1)                            # normal rows used for training
+    test2_df  = load_merged("test", 2)                            # held-out eval only
 
-    # ── Fit normalizer on train1+2+3 ─────────────────────────────────────────
-    # train files are 100% benign (attack==0 throughout) — no filtering needed.
-    # train4 is held out as val — must not influence normalization stats.
+    # ── Fit normalizer on train1+2+3 (benign only) ───────────────────────────
     fit_df = pd.concat(train_dfs[:3], ignore_index=True)
     norm = HAISensorNormalizer(method="zscore")
     norm.fit(fit_df)
 
     cols = _sensor_cols(train_dfs[0])
+    span = input_len + target_len
 
-    # ── Helper: scale → array ────────────────────────────────────────────────
     def _to_array(df: pd.DataFrame) -> np.ndarray:
         return norm.transform(df)[cols].values.astype(np.float32)
 
-    # ── Train: window each file separately → concat (no gap crossing) ─────────
-    # train1+2+3 are fully benign — no row filtering needed
+    # ── Train: train1+2+3 (normal only) ──────────────────────────────────────
+    # Transformer = physical baseline of NORMAL system behavior.
+    # Must NOT see attacks — otherwise it partially accepts them as normal,
+    # weakening the physics constraint and anomaly separation.
     X_parts, Y_parts = [], []
-    for df in train_dfs[:3]:                            # train1, train2, train3
+    for df in train_dfs[:3]:
         arr = _to_array(df)
         Xi, Yi = _seq2seq_windows(arr, input_len, target_len, stride)
         X_parts.append(Xi)
@@ -132,39 +139,28 @@ def twin(
     X_train = np.concatenate(X_parts, axis=0)
     Y_train = np.concatenate(Y_parts, axis=0)
 
-    # ── Val: train4 (also fully benign) ──────────────────────────────────────
+    # ── Val: train4 benign ────────────────────────────────────────────────────
     arr_val      = _to_array(train_dfs[3])
     X_val, Y_val = _seq2seq_windows(arr_val, input_len, target_len, stride)
 
-    # ── Test: window each file separately (no gap crossing), then concat ────────
-    span = input_len + target_len
-    X_test_parts, Y_test_parts, y_test_parts = [], [], []
-    for df in test_dfs:
-        arr  = norm.transform(df)[cols].values.astype(np.float32)
-        y_raw = df["attack"].values.astype(np.int32)
-        Xi, Yi = _seq2seq_windows(arr, input_len, target_len, stride)
-        starts = range(0, len(arr) - span + 1, stride)
-        yi = np.array([int(y_raw[s : s + span].any()) for s in starts],
-                      dtype=np.int32)
-        X_test_parts.append(Xi)
-        Y_test_parts.append(Yi)
-        y_test_parts.append(yi)
-    X_test        = np.concatenate(X_test_parts, axis=0)
-    Y_test        = np.concatenate(Y_test_parts, axis=0)
-    y_test_labels = np.concatenate(y_test_parts, axis=0)
-    del X_test_parts, Y_test_parts, y_test_parts
+    # ── Test: test2 only (held-out) ───────────────────────────────────────────
+    arr_t2        = _to_array(test2_df)
+    y_t2          = test2_df["attack"].values.astype(np.int32)
+    X_test, Y_test = _seq2seq_windows(arr_t2, input_len, target_len, stride)
+    starts         = list(range(0, len(arr_t2) - span + 1, stride))
+    y_test_labels  = np.array([int(y_t2[s : s + span].any()) for s in starts], dtype=np.int32)
 
     print("Digital Twin data ready:")
-    print(f"  X_train {X_train.shape}  Y_train {Y_train.shape}")
+    print(f"  X_train {X_train.shape}  Y_train {Y_train.shape}  (normal only)")
     print(f"  X_val   {X_val.shape}    Y_val   {Y_val.shape}")
-    print(f"  X_test  {X_test.shape}   Y_test  {Y_test.shape}")
+    print(f"  X_test  {X_test.shape}   Y_test  {Y_test.shape}   (test2 held-out)")
 
     return {
         "X_train": X_train, "Y_train": Y_train,
         "X_val":   X_val,   "Y_val":   Y_val,
         "X_test":  X_test,  "Y_test":  Y_test,
         "y_test_labels": y_test_labels,
-        "norm": norm,
+        "norm":    norm,
     }
 
 
@@ -173,64 +169,67 @@ def twin(
 #    Usage: from utils.prep import generate
 # ─────────────────────────────────────────────────────────────────────────────
 
-def generate(norm: HAISensorNormalizer | None = None) -> dict:
+def generate(
+    norm:       HAISensorNormalizer | None = None,
+    window_len: int = 240,   # 60 enc + 180 dec  — matches Transformer split
+    stride:     int = 60,
+) -> dict:
     """
-    Prepared data for the Attack Generator group (Diffusion / VAE / LSTM-AE / DoppelGANger).
+    Prepared data for the Attack Generator group (Diffusion / VAE / LSTM-AE).
 
     Train on:
-        attack_rows  : test1 + test2  where attack == 1   shape (N, 277)
-        normal_rows  : train1         where attack == 0   shape (M, 277)
-                       used for class conditioning
+        attack_windows : test1 attack windows  shape (N, window_len, 277)
+        normal_windows : train1 normal windows shape (M, window_len, 277)
 
-    Eval (TSTR):
-        generate synthetic attack rows → train XGBoost → test on real test1+2
+    test1 is used for training (known attacks).
+    test2 is the held-out evaluation set — never used here.
 
     Args
     ----
-    norm : fitted HAISensorNormalizer from twin().
-           If None, a new one is fitted on train1 benign.
+    norm       : fitted HAISensorNormalizer from twin().
+                 If None, fitted on train1 benign.
+    window_len : total window length (enc + dec).  Default 240 = 60+180.
+    stride     : sliding window stride.
 
     Returns dict with keys:
-        attack_rows  : (N, 277) float32  — real attack samples to learn from
-        normal_rows  : (M, 277) float32  — real normal samples for conditioning
-        X_test_all   : (K, 277) float32  — full test1+2 for TSTR evaluation
-        y_test_all   : (K,)     int      — labels for TSTR evaluation
-        norm         : the normalizer used
+        attack_windows : (N, window_len, 277) — test1 attack windows
+        normal_windows : (M, window_len, 277) — train1 normal windows
+        norm           : the normalizer used
     """
     train1_df = load_merged("train", 1)
-    test_dfs  = [load_merged("test", i) for i in range(1, 3)]
-    test_all  = pd.concat(test_dfs, ignore_index=True)
+    test1_df  = load_merged("test",  1)   # test1 only — test2 is held-out
 
     if norm is None:
         norm = HAISensorNormalizer(method="zscore")
-        norm.fit(train1_df)   # train1 is fully benign — no filtering needed
+        norm.fit(train1_df)
 
     cols = _sensor_cols(train1_df)
 
-    # Normal rows from train1 — entire file is benign
-    train1_scaled = norm.transform(train1_df)
-    normal_rows   = train1_scaled[cols].values.astype(np.float32)
+    def _windows(df: pd.DataFrame, mask: np.ndarray | None = None) -> np.ndarray:
+        arr = norm.transform(df)[cols].values.astype(np.float32)
+        if mask is not None:
+            arr = arr[mask]
+        starts = range(0, len(arr) - window_len + 1, stride)
+        wins = np.empty((len(starts), window_len, arr.shape[1]), dtype=np.float32)
+        for i, s in enumerate(starts):
+            wins[i] = arr[s : s + window_len]
+        return wins
 
-    # Attack rows from test1+2 — attacks only exist in test files
-    test_scaled = norm.transform(test_all)
-    attack_mask = test_all["attack"] == 1
-    attack_rows = test_scaled.loc[attack_mask, cols].values.astype(np.float32)
+    # Attack windows — test1 rows where attack==1
+    attack_mask = test1_df["attack"].values == 1
+    attack_windows = _windows(test1_df, mask=attack_mask)
 
-    # Full test set for TSTR evaluation
-    X_test_all = test_scaled[cols].values.astype(np.float32)
-    y_test_all = test_all["attack"].values.astype(np.int32)
+    # Normal windows — train1 (fully benign)
+    normal_windows = _windows(train1_df)
 
     print("Attack Generator data ready:")
-    print(f"  attack_rows  {attack_rows.shape}   (from test1+2, label=1)")
-    print(f"  normal_rows  {normal_rows.shape}   (from train1,  label=0)")
-    print(f"  X_test_all   {X_test_all.shape}    y_test_all {y_test_all.shape}")
+    print(f"  attack_windows {attack_windows.shape}  (from test1, attack==1)")
+    print(f"  normal_windows {normal_windows.shape}  (from train1, normal)")
 
     return {
-        "attack_rows": attack_rows,
-        "normal_rows": normal_rows,
-        "X_test_all":  X_test_all,
-        "y_test_all":  y_test_all,
-        "norm":        norm,
+        "attack_windows": attack_windows,
+        "normal_windows": normal_windows,
+        "norm":           norm,
     }
 
 

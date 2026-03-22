@@ -44,3 +44,34 @@ git push origin your-feature-name
 - Predict future system behavior (Digital Twin)
 - Detect anomalies (ISO Forest)
 - Generate attacks (Diffusion / VAE)
+
+---
+
+## 🏗️ Architecture
+
+> [View full interactive diagram](docs/architecture.html)
+
+**3 layers + Guided Generation (main research contribution):**
+
+| Layer | Primary | Baseline | Data |
+|-------|---------|----------|------|
+| Physical Model | Transformer Seq2Seq | LSTM | train1-3 normal only |
+| Detector | ISO Forest | LSTM Autoencoder | Transformer errors |
+| Attack Generator | Conditional Diffusion | VAE | test1 attacks only |
+| Guided Generation | Rejection Sampling | — | inference only |
+| Final Evaluation | — | — | test2 blind test |
+
+---
+
+## 📊 Results
+
+| Metric | Value |
+|--------|-------|
+| RMSE normal | 0.097 |
+| RMSE known attacks | 6.635 |
+| Attack/Normal ratio | 68x |
+| RMSE novel attacks | 4.028 |
+| Generalization Gap | 2.607 |
+| Acceptance rate | 100% |
+| ISO Forest F1 | 0.346 |
+| ISO Forest ROC-AUC | 0.659 |
