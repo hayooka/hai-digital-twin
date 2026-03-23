@@ -12,7 +12,7 @@ This project uses two public ICS security datasets, merged into one.
 
 ### HAIEnd Dataset
 - **Source:** https://github.com/icsdataset/haiend
-- **Paper:** HAIEnd: an extended HAI dataset
+- **Paper:** HAI: HIL-based Augmented ICS Security Dataset
 
 ---
 
