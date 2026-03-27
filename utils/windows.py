@@ -39,7 +39,7 @@ import numpy as np
 
 def make_windows(
     X: np.ndarray,
-    window_size: int = 60,
+    window_size: int = 300,
     stride: int = 1,
 ) -> np.ndarray:
     """
@@ -78,7 +78,7 @@ def make_windows(
 
 def label_windows(
     y: np.ndarray,
-    window_size: int = 60,
+    window_size: int = 300,
     stride: int = 1,
     policy: str = "last",
 ) -> np.ndarray:
@@ -128,7 +128,7 @@ def label_windows(
 def make_windows_with_labels(
     X: np.ndarray,
     y: np.ndarray,
-    window_size: int = 60,
+    window_size: int = 300,
     stride: int = 1,
     policy: str = "any",
 ) -> tuple[np.ndarray, np.ndarray]:

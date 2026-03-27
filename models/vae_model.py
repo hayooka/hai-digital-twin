@@ -1,23 +1,44 @@
 """
-VAE — Attack Generator (baseline)
+VAE — Layer 3: Attack Generator (baseline)
 
-Data:   attack_rows: test1+2 where attack==1  shape (N, 277)
-        normal_rows: train1 (all benign)       shape (M, 277)  ← class conditioning
-Eval:   TSTR — generate synthetic attacks → train XGBoost → test on real test1+2
+Trains on real attack windows from test1, generates synthetic attacks.
+These feed into the Guided Generation pipeline (physics + detectability checks).
 
-TIP: Pass norm from twin() if Digital Twin was already run,
-     to keep normalization consistent across all models.
+Eval: TSTR — generate synthetic attacks → train XGBoost → test on real test2.
+
+Window size = 300s  (from window_size_analysis notebook).
+Pass norm from twin() if the Digital Twin was already run — keeps the
+normalisation consistent across all layers.
 """
 
+import sys
+import numpy as np
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from utils.prep import generate
 
-# norm = data_twin["norm"]   # optional: pass from twin() for consistency
-data = generate(norm=None)   # replace None with norm if available
+Path("outputs").mkdir(exist_ok=True)
 
-attack_rows = data["attack_rows"]   # (N, 277)  real attacks — VAE trains on this
-normal_rows = data["normal_rows"]   # (M, 277)  normal rows  — for class conditioning
-X_test_tstr = data["X_test_all"]   # (K, 277)  full test1+2  — for TSTR evaluation
-y_test_tstr = data["y_test_all"]   # (K,)       labels        — for TSTR evaluation
-norm        = data["norm"]
+# ── Data ──────────────────────────────────────────────────────────────────────
+# norm = twin_data["norm"]   # optional: pass from twin() for cross-layer consistency
+data = generate(norm=None, window_len=300, stride=60)
+
+attack_windows = data["attack_windows"]   # (N, 300, F)  test1 attack windows
+normal_windows = data["normal_windows"]   # (M, 300, F)  train1 normal windows
+norm           = data["norm"]
+
+F = attack_windows.shape[2]   # dynamic sensor count after constant deletion
+
+# ── Flat rows for VAE (row-level generation) ──────────────────────────────────
+# The VAE operates on individual timestep rows, not full windows.
+# Flatten (N, 300, F) → (N*300, F) to get per-timestep attack rows.
+attack_rows = attack_windows.reshape(-1, F)   # (N*300, F)
+normal_rows = normal_windows.reshape(-1, F)   # (M*300, F)
+
+print(f"VAE data ready:")
+print(f"  attack_rows {attack_rows.shape}  (test1, attack==1, flattened)")
+print(f"  normal_rows {normal_rows.shape}  (train1, normal, flattened)")
+print(f"  F = {F}  (sensor count after constant deletion)")
 
 # ── Build and train VAE here ──────────────────────────────────────────────────

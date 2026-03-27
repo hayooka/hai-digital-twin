@@ -26,9 +26,8 @@ from utils.prep import generate
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-N_FEAT       = 277            # number of sensor features
-# N_FEAT     = 86             # HAI-only mode (commented out)
-WINDOW_LEN   = 240            # 60 enc + 180 dec — matches Transformer seq2seq split
+N_FEAT       = None           # set dynamically from generate() data shape
+WINDOW_LEN   = 300            # from window_size_analysis notebook recommendation
 N_ATTACK_TYPES = 3            # FDI=0, Replay=1, DoS=2
 
 # DDPM schedule
@@ -595,11 +594,16 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
 
     # ── 1. Load data ──────────────────────────────────────────────────────────
-    # generate() loads test1 attack windows (240 steps = 60 enc + 180 dec).
+    # generate() loads test1 attack windows (300s, from window_size_analysis).
     # test2 is held-out and never touched here.
     print("\nLoading attack windows via generate()...")
     data = generate(window_len=WINDOW_LEN, stride=60)
     norm = data["norm"]
+
+    # Set N_FEAT dynamically from actual data shape (after constant deletion)
+    import models.diffusion_model as _self
+    _self.N_FEAT = data["attack_windows"].shape[2]
+    print(f"  N_FEAT = {_self.N_FEAT}  (after constant deletion)")
 
     # ── 2. Train diffusion model ──────────────────────────────────────────────
     print("\nTraining Conditional Diffusion Model...")

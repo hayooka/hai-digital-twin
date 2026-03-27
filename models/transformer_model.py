@@ -1,13 +1,19 @@
 """
-Transformer Seq2Seq — Digital Twin (primary)
+Transformer Seq2Seq — Layer 1: Physical Model / Digital Twin (primary)
 
-Data:   train1+2+3 (normal only) → windowed per file
-        Val:  train4 (normal only)
-        Test: test2 only (held-out — never seen during training)
-Shape:  X (N, 60, 277) → Y (N, 180, 277)
+Predicts NORMAL sensor readings given 300s of context.
+Trained on benign data only (80% of each train1-4, temporal split).
+High reconstruction error on test2 = anomaly signal → passed to Layer 2.
 
-No attack-type labels used — model learns purely from sensor values.
-High reconstruction error on test2 = anomaly signal.
+Data split (temporal 80/20 per file — see utils/prep.py twin()):
+    Train : first 80% of train1-4  → windowed per file (no gap crossing)
+    Val   : last  20% of train1-4  → same per-file windowing
+    Test  : test2 only (held-out — never seen during training)
+
+Shape: X (N, 300, F) → Y (N, 180, F)   where F = actual sensor count after
+       constant column deletion (determined at runtime, ~112 features).
+
+Window size = 300s  (from window_size_analysis notebook).
 """
 
 import sys
@@ -19,20 +25,22 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))  # add project root to path
 from utils.prep import twin
+from utils.eval  import evaluate_twin
 
 # ── Data ──────────────────────────────────────────────────────────────────────
-data    = twin(input_len=60, target_len=180, stride=60)   # stride=1 → OOM; 60=3× more data than stride=180
-X_train = data["X_train"]        # (N, 60,  277)  encoder input  — normal only
-Y_train = data["Y_train"]        # (N, 180, 277)  decoder target
-X_val   = data["X_val"]          # (M, 60,  277)
-Y_val   = data["Y_val"]          # (M, 180, 277)
-X_test  = data["X_test"]         # (K, 60,  277)  — test2 only
-Y_test  = data["Y_test"]         # (K, 180, 277)
+# stride=60 keeps memory manageable; stride=1 → OOM on 300s windows
+data    = twin(input_len=300, target_len=180, stride=60)
+X_train = data["X_train"]        # (N, 300, F)  encoder input — normal only
+Y_train = data["Y_train"]        # (N, 180, F)  decoder target
+X_val   = data["X_val"]          # (M, 300, F)  last 20% of each train file
+Y_val   = data["Y_val"]          # (M, 180, F)
+X_test  = data["X_test"]         # (K, 300, F)  test2 held-out
+Y_test  = data["Y_test"]         # (K, 180, F)
 y_test  = data["y_test_labels"]  # (K,)  0=normal 1=attack
-norm    = data["norm"]           # pass to ISO Forest later
+norm    = data["norm"]           # fitted normalizer — pass to ISO Forest
 
 # ── Hyperparameters ───────────────────────────────────────────────────────────
-N_FEAT   = X_train.shape[2]   # 277
+N_FEAT   = X_train.shape[2]   # dynamic: actual sensor count after constant deletion
 D_MODEL  = 256
 N_HEADS  = 8
 N_LAYERS = 4
@@ -70,14 +78,14 @@ class TransformerSeq2Seq(nn.Module):
     """
     Encoder-Decoder Transformer for sensor forecasting.
 
-    Encoder: processes 60 past timesteps → context (memory)
-    Decoder: predicts 180 future timesteps from context
+    Encoder: processes 300s of past sensor readings → context (memory)
+    Decoder: predicts 180s of future readings from context
     Loss:    MSE on sensor values
 
-    No attack-type conditioning — model learns purely from sensor values.
-    Anomaly detection via reconstruction error: high error = attack.
+    No attack-type conditioning — learns purely from sensor values.
+    Anomaly detection via reconstruction error: high error on test2 = attack.
     """
-    def __init__(self, n_features=277, d_model=128, n_heads=8,
+    def __init__(self, n_features=N_FEAT, d_model=128, n_heads=8,
                  n_layers=3, ffn_dim=512, dropout=0.1):
         super().__init__()
         self.input_proj  = nn.Linear(n_features, d_model)
@@ -101,9 +109,9 @@ class TransformerSeq2Seq(nn.Module):
 
     def forward(self, src, tgt_in):
         """
-        src:    (B, 60,  277)  encoder input
-        tgt_in: (B, 180, 277)  teacher-forced decoder input
-        returns (B, 180, 277)
+        src:    (B, 300, F)  encoder input (300s context window)
+        tgt_in: (B, 180, F)  teacher-forced decoder input
+        returns (B, 180, F)
         """
         memory = self.encode(src)
         tgt_h  = self.pos_enc(self.input_proj(tgt_in))
@@ -117,7 +125,7 @@ class TransformerSeq2Seq(nn.Module):
     def predict(self, src, dec_len=180):
         """
         Autoregressive inference — no teacher forcing.
-        src: (B, 60, 277) → returns (B, dec_len, 277)
+        src: (B, 300, F) → returns (B, dec_len, F)
         """
         self.eval()
         memory = self.encode(src)
@@ -210,63 +218,31 @@ def train(model, X_tr, Y_tr, X_v, Y_v,
 
 # ── Evaluation ────────────────────────────────────────────────────────────────
 
-
-def evaluate(model, X_val, Y_val, X_test, Y_test, y_test):
+def make_predict_fn(model, batch_size=BATCH):
     """
-    Evaluates the Transformer as a SIMULATOR — using RMSE only.
-    F1/ROC-AUC belong to ISO Forest, not here.
-
-    Reports:
-        RMSE on val (normal)         → baseline simulator accuracy
-        RMSE on test normal windows  → simulator on unseen normal
-        RMSE on test attack windows  → simulator on known attacks
+    Wrap a trained model into the predict_fn(X, Y) → Y_pred interface
+    expected by evaluate_twin() in utils/eval.py.
+    Teacher-forced: uses Y as decoder input (same as training).
     """
     device = next(model.parameters()).device
     model.eval()
 
-    def _rmse(X, Y, mask=None):
-        errs = []
+    def predict_fn(X: np.ndarray, Y: np.ndarray) -> np.ndarray:
+        preds = []
         with torch.no_grad():
-            for i in range(0, len(X), BATCH):
-                src    = torch.tensor(X[i:i+BATCH]).float().to(device)
-                tgt    = torch.tensor(Y[i:i+BATCH]).float().to(device)
+            for i in range(0, len(X), batch_size):
+                src    = torch.tensor(X[i:i+batch_size]).float().to(device)
+                tgt    = torch.tensor(Y[i:i+batch_size]).float().to(device)
                 dec_in = torch.cat([src[:, -1:, :], tgt[:, :-1, :]], dim=1)
                 pred   = model(src, dec_in)
-                mse    = ((pred - tgt) ** 2).mean(dim=(1, 2)).cpu().numpy()
-                errs.append(mse)
-        errs = np.concatenate(errs)
-        if mask is not None:
-            errs = errs[mask]
-        return float(np.sqrt(np.mean(errs)))
+                preds.append(pred.cpu().numpy())
+        return np.concatenate(preds, axis=0)
 
-    normal_mask = (y_test == 0)
-    attack_mask = (y_test == 1)
-
-    rmse_val    = _rmse(X_val,  Y_val)                      # normal baseline
-    rmse_normal = _rmse(X_test, Y_test, mask=normal_mask)   # test normal
-    rmse_attack = _rmse(X_test, Y_test, mask=attack_mask)   # test known attacks
-
-    print("\n" + "=" * 50)
-    print("  TRANSFORMER SEQ2SEQ — SIMULATOR EVALUATION")
-    print("=" * 50)
-    print(f"  RMSE val    (normal)         = {rmse_val:.5f}")
-    print(f"  RMSE test   (normal windows) = {rmse_normal:.5f}")
-    print(f"  RMSE test   (attack windows) = {rmse_attack:.5f}")
-    print(f"  Attack/Normal ratio          = {rmse_attack/rmse_normal:.2f}x")
-    print("  → Generalization Gap will be computed after Diffusion")
-    print("=" * 50)
-
-    return {
-        "rmse_val":    rmse_val,
-        "rmse_normal": rmse_normal,
-        "rmse_attack": rmse_attack,
-    }
+    return predict_fn
 
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    import json
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
@@ -280,8 +256,14 @@ if __name__ == "__main__":
     # ── 2. Train ──────────────────────────────────────────────────────────────
     model = train(model, X_train, Y_train, X_val, Y_val)
 
-    # ── 3. Evaluate (anomaly detection via reconstruction error) ──────────────
-    results = evaluate(model, X_val, Y_val, X_test, Y_test, y_test)
+    # ── 3. Evaluate as simulator (RMSE) — eTaPR belongs to ISO Forest ─────────
+    results = evaluate_twin(
+        predict_fn=make_predict_fn(model),
+        X_val=X_val, Y_val=Y_val,
+        X_test=X_test, Y_test=Y_test, y_test=y_test,
+        label="Transformer Seq2Seq",
+        save_path="outputs/transformer_metrics.json",
+    )
 
     # ── 4. Compute per-sensor errors → for ISO Forest ─────────────────────────
     print("\nComputing per-sensor reconstruction errors for ISO Forest...")
@@ -298,9 +280,6 @@ if __name__ == "__main__":
         "y_test":       y_test,
         "metrics":      results,
     }, "outputs/transformer_twin.pt")
-
-    with open("outputs/transformer_metrics.json", "w") as f:
-        json.dump(results, f, indent=2)
 
     print("\nSaved:")
     print("  outputs/transformer_twin.pt      (model + errors)")
