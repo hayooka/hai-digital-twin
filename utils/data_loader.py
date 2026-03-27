@@ -226,7 +226,10 @@ def identify_common_constants(std_threshold=1e-6) -> tuple[list[str], list[str]]
     return hai_common, hiend_common
 
 
-
+def load_merged(split: str, num: int, drop_constants: bool = True,
+                keep_hai_duplicates: bool = True,
+                const_cols_hai: list | None = None,
+                const_cols_hiend: list | None = None) -> "pd.DataFrame":
     """
     Load and merge HAI + HIEND for a given split ('train' or 'test') and number.
 
