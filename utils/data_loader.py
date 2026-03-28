@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import functools
 import pandas as pd
 import numpy as np
 
@@ -9,44 +10,43 @@ HIEND_DIR = "C:\\Users\\ahmma\\Desktop\\farah\\haiend-23.05"
 #set HIEND_DIR= C:/Users/farah/OneDrive/Desktop/AI_project/haiend-23.05
 
 
-# HAI columns that are duplicated in HIEND (confirmed from dataset documentation).
-# HIEND version takes priority — these HAI columns are dropped after merging.
-HAI_DUPLICATES = [
-    "x1001_15_ASSIGN_OUT",     # 1001.15-OUT
-    "P1_FCV01D",    # DM-FCV01-D
-    "P1_FCV01Z",    # DM-FCV01-Z
-    "P1_FCV02D",    # DM-FCV02-D
-    "P1_FCV02Z",    # DM-FCV02-Z
-    "P1_FCV03D",    # DM-FCV03-D
-    "P1_FCV03Z",    # DM-FCV03-Z
-    "P1_FT01",      # DM-FT01
-    "P1_FT01Z",     # DM-FT01Z
-    "P1_FT02",      # DM-FT02
-    "P1_FT02Z",     # DM-FT02Z
-    "P1_FT03",      # DM-FT03
-    "P1_FT03Z",     # DM-FT03Z
-    "P1_LCV01D",    # DM-LCV01-D
-    "P1_LCV01Z",    # DM-LCV01-Z
-    "P1_LIT01",     # DM-LIT01
-    "P1_PCV01D",    # DM-PCV01-D
-    "P1_PCV01Z",    # DM-PCV01-Z
-    "P1_PCV02D",    # DM-PCV02-D
-    "P1_PCV02Z",    # DM-PCV02-Z
-    "P1_PIT01_HH",  # DM-PIT01-HH
-    "P1_PIT01",     # DM-PIT01
-    "P1_PIT02",     # DM-PIT02
-    "P1_PP01AD",    # DM-PP01A-D
-    "P1_PP01AR",    # DM-PP01A-R
-    "P1_PP01BD",    # DM-PP01B-D
-    "P1_PP01BR",    # DM-PP01B-R
-    "P1_PP02D",     # DM-PP02-D
-    "P1_PP02R",     # DM-PP02-R
-    "P1_SOL01D",    # DM-SOL01-D
-    "P1_SOL03D",    # DM-SOL03-D
-    "P1_STSP",      # DM-ST-SP
-    "P1_TIT01",     # DM-TIT01
-    "P1_TIT03",     # DM-TIT02  (note: HAI TIT03 = HIEND TIT02)
-    "P4_ST_GOV",    # GATEOPEN
+# HAI column names that have a known counterpart in HAIEnd.
+# Used in the fallback path of load_merged (keep_hai_duplicates=False).
+HAI_DUPLICATES: list[str] = [
+    "x1001_15_ASSIGN_OUT", "P1_FCV01D", "P1_FCV01Z", "P1_FCV02D", "P1_FCV02Z",
+    "P1_FCV03D", "P1_FCV03Z", "P1_FT01", "P1_FT01Z", "P1_FT02", "P1_FT02Z",
+    "P1_FT03", "P1_FT03Z", "P1_LCV01D", "P1_LCV01Z", "P1_LIT01",
+    "P1_PCV01D", "P1_PCV01Z", "P1_PCV02D", "P1_PCV02Z", "P1_PIT01_HH",
+    "P1_PIT01", "P1_PIT02", "P1_PP01AD", "P1_PP01AR", "P1_PP01BD", "P1_PP01BR",
+    "P1_PP02D", "P1_PP02R", "P1_SOL01D", "P1_SOL03D", "P1_STSP",
+    "P1_TIT01", "P1_TIT03", "P4_ST_GOV",
+]
+
+# (HAI col, HAIEnd col) pairs to test for correlation.
+# Pairs with corr > 0.99 in ALL 4 train files → drop the HAIEnd copy.
+# Shared by identify_common_constants() and load_merged() — defined once here.
+CANDIDATE_PAIRS: list[tuple[str, str]] = [
+    ("x1001_15_ASSIGN_OUT", "1001.15-OUT"),
+    ("P1_FCV01D",   "DM-FCV01-D"),  ("P1_FCV01Z",   "DM-FCV01-Z"),
+    ("P1_FCV02D",   "DM-FCV02-D"),  ("P1_FCV02Z",   "DM-FCV02-Z"),
+    ("P1_FCV03D",   "DM-FCV03-D"),  ("P1_FCV03Z",   "DM-FCV03-Z"),
+    ("P1_FT01",     "DM-FT01"),     ("P1_FT01Z",    "DM-FT01Z"),
+    ("P1_FT02",     "DM-FT02"),     ("P1_FT02Z",    "DM-FT02Z"),
+    ("P1_FT03",     "DM-FT03"),     ("P1_FT03Z",    "DM-FT03Z"),
+    ("P1_LCV01D",   "DM-LCV01-D"), ("P1_LCV01Z",   "DM-LCV01-Z"),
+    ("P1_LIT01",    "DM-LIT01"),
+    ("P1_PCV01D",   "DM-PCV01-D"), ("P1_PCV01Z",   "DM-PCV01-Z"),
+    ("P1_PCV02D",   "DM-PCV02-D"), ("P1_PCV02Z",   "DM-PCV02-Z"),
+    ("P1_PIT01_HH", "DM-PIT01-HH"),
+    ("P1_PIT01",    "DM-PIT01"),    ("P1_PIT02",    "DM-PIT02"),
+    ("P1_PP01AD",   "DM-PP01A-D"), ("P1_PP01AR",   "DM-PP01A-R"),
+    ("P1_PP01BD",   "DM-PP01B-D"), ("P1_PP01BR",   "DM-PP01B-R"),
+    ("P1_PP02D",    "DM-PP02-D"),  ("P1_PP02R",    "DM-PP02-R"),
+    ("P1_SOL01D",   "DM-SOL01-D"), ("P1_SOL03D",   "DM-SOL03-D"),
+    ("P1_STSP",     "DM-ST-SP"),
+    ("P1_TIT01",    "DM-TIT01"),
+    ("P1_TIT03",    "DM-TIT02"),   # HAI TIT03 = HAIEnd TIT02
+    ("P4_ST_GOV",   "GATEOPEN"),
 ]
 
 
@@ -185,51 +185,99 @@ def identify_universal_constants(split: str, std_threshold=1e-6) -> tuple[list[s
     return sorted(hai_universal), sorted(hiend_universal)
 
 
-def identify_common_constants(std_threshold=1e-6) -> tuple[list[str], list[str]]:
+@functools.lru_cache(maxsize=1)
+def identify_common_constants(std_threshold: float = 1e-6) -> tuple[list[str], list[str], list[str]]:
     """
-    Identify columns that are CONSTANT in BOTH train AND test splits.
-    
-    Logic:
-    - Constants in BOTH train & test → No signal anywhere → DROP them
-    - Constants in train ONLY → Have variation in test → KEEP them (early anomaly indicators!)
-    
-    Verified findings:
-    - HAI: 18 columns constant in both (DROP)
-    - HAI: 2 columns constant in train only (KEEP - may signal attacks)
-    - HAIEnd: 151 columns constant in both (DROP)
-    
-    :param std_threshold: Threshold for constant detection
-    :return: (hai_common_constants, hiend_common_constants)
+    Compute — once per process — the three drop-lists needed for a consistent
+    feature space across every train and test file.
+
+    Returns
+    -------
+    hai_common        : HAI cols constant in BOTH train & test          → DROP (18)
+    hiend_common      : HAIEnd cols constant in BOTH train & test       → DROP (151)
+    hiend_consistent_dups : HAIEnd cols with corr > 0.99 vs HAI partner
+                            in ALL 4 train files                        → DROP (21)
+
+    Rule:
+        constant in BOTH splits  → no signal anywhere      → DROP
+        constant in train ONLY   → varies in test attacks  → KEEP
+        high-corr dup in all 4 trains → truly redundant    → DROP HAIEnd copy
+
+    Verified: 68 HAI + 53 HAIEnd + 2 metadata = 123 cols → N_FEAT = 121.
+
+    Cached with lru_cache — calling from twin(), generate(), detect() is free
+    after the first call; files are only read once per process.
     """
-    meta_cols = {'timestamp', 'attack', 'label', 'attack_p1', 'attack_p2', 'attack_p3'}
-    
-    # Get train universal constants
-    hai_train_const, hiend_train_const = identify_universal_constants('train', std_threshold)
-    
-    # Get test universal constants
-    hai_test_const, hiend_test_const = identify_universal_constants('test', std_threshold)
-    
-    # Common = intersection (constant in BOTH splits)
-    hai_common = sorted(list(set(hai_train_const) & set(hai_test_const)))
-    hiend_common = sorted(list(set(hiend_train_const) & set(hiend_test_const)))
-    
-    # Train-only = difference (constant in train ONLY)
-    hai_train_only = sorted(list(set(hai_train_const) - set(hai_test_const)))
-    hiend_train_only = sorted(list(set(hiend_train_const) - set(hiend_test_const)))
-    
-    print(f"\n  Constants analysis (will DROP only common, KEEP train-only):")
-    print(f"    HAI common (both splits): {len(hai_common)}")
-    print(f"    HAI train-only (KEEP - potential signals): {len(hai_train_only)}")
-    print(f"    HAIEnd common (both splits): {len(hiend_common)}")
-    print(f"    HAIEnd train-only (KEEP - potential signals): {len(hiend_train_only)}")
-    
-    return hai_common, hiend_common
+    meta_cols = {"timestamp", "attack", "label", "attack_p1", "attack_p2", "attack_p3"}
+
+    hai_train_sets:   list[set] = []
+    hiend_train_sets: list[set] = []
+    pair_high_count = {(h, he): 0 for h, he in CANDIDATE_PAIRS}
+
+    # ── Single pass over train files: compute constants + correlations ─────────
+    for num in range(1, 5):
+        h_df  = pd.read_csv(os.path.join(HAI_DIR,   f"hai-train{num}.csv"))
+        he_df = pd.read_csv(os.path.join(HIEND_DIR, f"end-train{num}.csv"))
+        h_df.rename(columns={h_df.columns[0]:   "timestamp"}, inplace=True)
+        he_df.rename(columns={he_df.columns[0]: "timestamp"}, inplace=True)
+        h_df["timestamp"]  = pd.to_datetime(h_df["timestamp"])
+        he_df["timestamp"] = pd.to_datetime(he_df["timestamp"])
+
+        hai_train_sets.append(set(get_constant_columns(h_df,  meta_cols, std_threshold)))
+        hiend_train_sets.append(set(get_constant_columns(he_df, meta_cols, std_threshold)))
+
+        for hai_col, hiend_col in CANDIDATE_PAIRS:
+            if hai_col not in h_df.columns or hiend_col not in he_df.columns:
+                continue
+            tmp = pd.merge(
+                h_df[["timestamp", hai_col]],
+                he_df[["timestamp", hiend_col]],
+                on="timestamp", how="inner",
+            )
+            if len(tmp) < 2:
+                continue
+            hai_v   = tmp[hai_col].values[1:].astype(float)
+            hiend_v = tmp[hiend_col].values[:-1].astype(float)
+            if hai_v.std() < 1e-9 or hiend_v.std() < 1e-9:
+                continue
+            if float(np.corrcoef(hai_v, hiend_v)[0, 1]) > 0.99:
+                pair_high_count[(hai_col, hiend_col)] += 1
+
+    # ── Single pass over test files: constants only ────────────────────────────
+    hai_test_sets:   list[set] = []
+    hiend_test_sets: list[set] = []
+    for num in range(1, 3):
+        h_df  = pd.read_csv(os.path.join(HAI_DIR,   f"hai-test{num}.csv"))
+        he_df = pd.read_csv(os.path.join(HIEND_DIR, f"end-test{num}.csv"))
+        h_df.rename(columns={h_df.columns[0]:   "timestamp"}, inplace=True)
+        he_df.rename(columns={he_df.columns[0]: "timestamp"}, inplace=True)
+        hai_test_sets.append(set(get_constant_columns(h_df,  meta_cols, std_threshold)))
+        hiend_test_sets.append(set(get_constant_columns(he_df, meta_cols, std_threshold)))
+
+    # ── Compute drop lists ─────────────────────────────────────────────────────
+    hai_train_univ   = set.intersection(*hai_train_sets)
+    hiend_train_univ = set.intersection(*hiend_train_sets)
+    hai_test_univ    = set.intersection(*hai_test_sets)
+    hiend_test_univ  = set.intersection(*hiend_test_sets)
+
+    hai_common   = sorted(hai_train_univ   & hai_test_univ)
+    hiend_common = sorted(hiend_train_univ & hiend_test_univ)
+    hiend_consistent_dups = sorted(
+        hiend_col for (_, hiend_col), cnt in pair_high_count.items() if cnt == 4
+    )
+
+    print(f"  identify_common_constants → "
+          f"HAI drop {len(hai_common)}, HAIEnd drop {len(hiend_common)}, "
+          f"HIEND dups drop {len(hiend_consistent_dups)}")
+
+    return hai_common, hiend_common, hiend_consistent_dups
 
 
 def load_merged(split: str, num: int, drop_constants: bool = True,
                 keep_hai_duplicates: bool = True,
                 const_cols_hai: list | None = None,
-                const_cols_hiend: list | None = None) -> "pd.DataFrame":
+                const_cols_hiend: list | None = None,
+                hiend_dup_cols: list | None = None) -> "pd.DataFrame":
     """
     Load and merge HAI + HIEND for a given split ('train' or 'test') and number.
 
@@ -249,11 +297,11 @@ def load_merged(split: str, num: int, drop_constants: bool = True,
     
     3. Merge on exact timestamp (inner join — unmatched boundary rows dropped)
     
-    **Final column count per train file:**
-       - HAI sensors: 66 columns (86 - 18 constants - 2 other)
-       - HAIEnd sensors: 46 columns (225 - 151 constants - 28 duplicates)
+    **Final column count per train file (verified from actual data):**
+       - HAI sensors: 68 columns (86 - 18 common constants)
+       - HAIEnd sensors: 53 columns (225 - 151 common constants - 21 consistent duplicates)
        - Metadata: 2 columns (timestamp, attack)
-       - TOTAL: 114 columns
+       - TOTAL: 123 columns  →  N_FEAT = 121 sensor features
     
     :param split: 'train' or 'test'
     :param num: Split number (1-4 for train, 1-2 for test)
@@ -299,53 +347,25 @@ def load_merged(split: str, num: int, drop_constants: bool = True,
             print(f"  [UNIVERSAL] Dropping {len(cols_to_drop_hai)} HAI + {len(cols_to_drop_hiend)} HAIEnd constants (same across all {split} files)")
     
     
-    # ---- STEP 2: Handle duplicates with dynamic correlation checking ----
-    if keep_hai_duplicates:
-        # Candidate duplicate pairs: (HAI_col, HAIEnd_col)
-        candidate_pairs = [
-            ('x1001_15_ASSIGN_OUT',    '1001.15-OUT'),   # NOTE: P1_B2016 may not exist
-            ('P1_FCV01D',   'DM-FCV01-D'),
-            ('P1_FCV01Z',   'DM-FCV01-Z'),
-            ('P1_FCV02D',   'DM-FCV02-D'),
-            ('P1_FCV02Z',   'DM-FCV02-Z'),
-            ('P1_FCV03D',   'DM-FCV03-D'),
-            ('P1_FCV03Z',   'DM-FCV03-Z'),
-            ('P1_FT01',     'DM-FT01'),
-            ('P1_FT01Z',    'DM-FT01Z'),
-            ('P1_FT02',     'DM-FT02'),
-            ('P1_FT02Z',    'DM-FT02Z'),
-            ('P1_FT03',     'DM-FT03'),
-            ('P1_FT03Z',    'DM-FT03Z'),
-            ('P1_LCV01D',   'DM-LCV01-D'),
-            ('P1_LCV01Z',   'DM-LCV01-Z'),
-            ('P1_LIT01',    'DM-LIT01'),
-            ('P1_PCV01D',   'DM-PCV01-D'),
-            ('P1_PCV01Z',   'DM-PCV01-Z'),
-            ('P1_PCV02D',   'DM-PCV02-D'),
-            ('P1_PCV02Z',   'DM-PCV02-Z'),
-            ('P1_PIT01_HH', 'DM-PIT01-HH'),
-            ('P1_PIT01',    'DM-PIT01'),
-            ('P1_PIT02',    'DM-PIT02'),
-            ('P1_PP01AD',   'DM-PP01A-D'),
-            ('P1_PP01AR',   'DM-PP01A-R'),
-            ('P1_PP01BD',   'DM-PP01B-D'),
-            ('P1_PP01BR',   'DM-PP01B-R'),
-            ('P1_PP02D',    'DM-PP02-D'),
-            ('P1_PP02R',    'DM-PP02-R'),
-            ('P1_SOL01D',   'DM-SOL01-D'),
-            ('P1_SOL03D',   'DM-SOL03-D'),
-            ('P1_STSP',     'DM-ST-SP'),
-            ('P1_TIT01',    'DM-TIT01'),
-            ('P1_TIT03',    'DM-TIT02'),   # naming mismatch: HAI TIT03 = HAIEnd TIT02
-            ('P4_ST_GOV',   'GATEOPEN'),
-        ]
-        
-        # Compute correlations and filter
+    # ---- STEP 2: Handle duplicates ----
+    # When hiend_dup_cols is provided (pre-computed by identify_common_constants),
+    # use the fixed list — guarantees identical N_FEAT across all files.
+    # Otherwise fall back to per-call dynamic correlation (slower, may vary per file).
+    if keep_hai_duplicates and hiend_dup_cols is not None:
+        cols_to_drop = [c for c in hiend_dup_cols if c in hiend.columns]
+        if cols_to_drop:
+            hiend = hiend.drop(columns=cols_to_drop)
+        if num == 1:
+            print(f"  Duplicate handling: removed {len(cols_to_drop)} HIEND cols (fixed consistent list)")
+    elif keep_hai_duplicates:
+        # Fallback: compute correlation per-call using module-level CANDIDATE_PAIRS.
+        # Prefer passing hiend_dup_cols (from identify_common_constants) to avoid
+        # this path — it re-reads the data and may give inconsistent counts per file.
         hiend_cols_to_drop = []
         dropped_high_corr = 0
         kept_low_corr = 0
-        
-        for hai_col, hiend_col in candidate_pairs:
+
+        for hai_col, hiend_col in CANDIDATE_PAIRS:
             # Skip if either column doesn't exist
             if hai_col not in hai.columns or hiend_col not in hiend.columns:
                 continue
@@ -479,12 +499,13 @@ def load_all_train() -> dict[str, pd.DataFrame]:
       * 2 metadata columns (timestamp, attack)
     """
     print("\n  [Step A: Identifying COMMON constants (in both train & test)]")
-    const_hai, const_hiend = identify_common_constants()
+    const_hai, const_hiend, hiend_dups = identify_common_constants()
     print(f"  ✓ Will DROP these constants: HAI {len(const_hai)}, HAIEnd {len(const_hiend)}")
     print(f"  ✓ KEEPING train-only constants (may be early anomaly signals)")
-    
+
     return {f"train{i}": load_merged("train", i, drop_constants=True, keep_hai_duplicates=True,
-                                     const_cols_hai=const_hai, const_cols_hiend=const_hiend) 
+                                     const_cols_hai=const_hai, const_cols_hiend=const_hiend,
+                                     hiend_dup_cols=hiend_dups)
             for i in range(1, 5)}
 
 

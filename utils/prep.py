@@ -133,11 +133,12 @@ def twin(
     norm              : fitted HAISensorNormalizer  (reuse in Layer 2 / 3 / 4)
     """
     # ── Compute common constants once (consistent columns across all splits) ──
-    const_hai, const_hiend = identify_common_constants()
+    const_hai, const_hiend, hiend_dups = identify_common_constants()
 
     def _load(split, num):
         return load_merged(split, num, drop_constants=True, keep_hai_duplicates=True,
-                           const_cols_hai=const_hai, const_cols_hiend=const_hiend)
+                           const_cols_hai=const_hai, const_cols_hiend=const_hiend,
+                           hiend_dup_cols=hiend_dups)
 
     # ── Load raw splits ───────────────────────────────────────────────────────
     train_dfs = [_load("train", i) for i in range(1, 5)]   # train1-4 (all benign)
@@ -233,11 +234,12 @@ def generate(
         normal_windows : (M, window_len, F) — train1 normal windows
         norm           : the normalizer used
     """
-    const_hai, const_hiend = identify_common_constants()
+    const_hai, const_hiend, hiend_dups = identify_common_constants()
 
     def _load(split, num):
         return load_merged(split, num, drop_constants=True, keep_hai_duplicates=True,
-                           const_cols_hai=const_hai, const_cols_hiend=const_hiend)
+                           const_cols_hai=const_hai, const_cols_hiend=const_hiend,
+                           hiend_dup_cols=hiend_dups)
 
     test1_df = _load("test", 1)   # test1 only — test2 is held-out
 
@@ -356,11 +358,12 @@ def detect(
     y_test_labels: (K,) int  — 0/1 attack label per window ("any" policy)
     norm         : fitted HAISensorNormalizer
     """
-    const_hai, const_hiend = identify_common_constants()
+    const_hai, const_hiend, hiend_dups = identify_common_constants()
 
     def _load(split, num):
         return load_merged(split, num, drop_constants=True, keep_hai_duplicates=True,
-                           const_cols_hai=const_hai, const_cols_hiend=const_hiend)
+                           const_cols_hai=const_hai, const_cols_hiend=const_hiend,
+                           hiend_dup_cols=hiend_dups)
 
     train_dfs = [_load("train", i) for i in range(1, 5)]
     test_dfs  = [_load("test",  i) for i in range(1, 3)]
