@@ -21,11 +21,15 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))  # add project root to path
 from utils.prep import twin
 from utils.eval  import evaluate_twin
+from utils.data_loader import load_merged, identify_common_constants
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 # stride=60 keeps memory manageable; stride=1 → OOM on 300s windows
@@ -241,6 +245,105 @@ def make_predict_fn(model, batch_size=BATCH):
     return predict_fn
 
 
+# ── Val prediction plots ───────────────────────────────────────────────────────
+
+META_COLS_PLOT = {"timestamp", "attack", "label", "attack_p1", "attack_p2", "attack_p3"}
+TRAIN_FRAC_PLOT = 0.8
+
+def plot_val_predictions(model: "TransformerSeq2Seq", fitted_norm, device):
+    """
+    Generate two evaluation plots using only the val 20% of each train file.
+    No test data used.
+
+    Outputs:
+        outputs/val_predictions_context.png    — full file + predicted val overlay
+        outputs/val_predictions_comparison.png — IBM-style actual (red) vs predicted (blue)
+    """
+    plt.style.use("fivethirtyeight")
+    const_hai, const_hiend, hiend_dups = identify_common_constants()
+
+    def _load_file(num):
+        df   = load_merged("train", num, drop_constants=True, keep_hai_duplicates=True,
+                           const_cols_hai=const_hai, const_cols_hiend=const_hiend,
+                           hiend_dup_cols=hiend_dups)
+        cols = [c for c in df.columns if c not in META_COLS_PLOT and df[c].dtype != object]
+        arr  = fitted_norm.transform(df)[cols].values.astype(np.float32)
+        return arr, cols
+
+    enc_len = X_train.shape[1]   # 300 — reuse the module-level loaded data shapes
+    dec_len = Y_train.shape[1]   # 180
+
+    @torch.no_grad()
+    def _predict_val(arr):
+        T         = len(arr)
+        val_start = int(T * TRAIN_FRAC_PLOT)
+        preds, pos = [], val_start
+        while pos + dec_len <= T:
+            enc_start = max(0, pos - enc_len)
+            enc = arr[enc_start:pos]
+            if len(enc) < enc_len:
+                pad = np.zeros((enc_len - len(enc), arr.shape[1]), dtype=np.float32)
+                enc = np.concatenate([pad, enc], axis=0)
+            src  = torch.tensor(enc[np.newaxis]).float().to(device)
+            pred = model.predict(src, dec_len=dec_len)
+            preds.append(pred[0].cpu().numpy())
+            pos += dec_len
+        return (np.concatenate(preds, axis=0) if preds else np.array([])), val_start
+
+    # Collect per-file results
+    results = {}
+    for num in range(1, 5):
+        print(f"  Plotting train{num} val ...")
+        arr, cols              = _load_file(num)
+        predictions, val_start = _predict_val(arr)
+        sidx                   = int(arr.var(axis=0).argmax())
+        results[num]           = (arr, cols, predictions, val_start, sidx)
+
+    # ── Figure 1: full-file context ───────────────────────────────────────────
+    fig1, axes1 = plt.subplots(4, 1, figsize=(16, 20))
+    fig1.suptitle("Transformer — val predictions in context\n"
+                  "(blue = actual full file · orange = predicted last 20%)", fontsize=13)
+    for i, num in enumerate(range(1, 5)):
+        arr, cols, preds, val_start, sidx = results[num]
+        ax = axes1[i]
+        ax.plot(arr[:, sidx], color="#1f77b4", lw=1, label="Actual (full file)")
+        if len(preds):
+            px   = np.arange(val_start, val_start + len(preds))
+            rmse = np.sqrt(((preds[:, sidx] - arr[val_start:val_start+len(preds), sidx])**2).mean())
+            ax.plot(px, preds[:, sidx], color="#ff7f0e", lw=1.2,
+                    label=f"Predicted val  RMSE={rmse:.4f}")
+        ax.axvline(val_start, color="grey", linestyle="--", lw=1)
+        ax.text(val_start + 20, ax.get_ylim()[1] * 0.92,
+                "← train 80%  |  val 20% →", fontsize=8, color="grey")
+        ax.set_title(f"train{num}  |  sensor: {cols[sidx][:35]}", fontsize=10)
+        ax.set_xlabel("timestep"); ax.set_ylabel("normalised value")
+        ax.legend(fontsize=9)
+    fig1.tight_layout()
+    fig1.savefig("outputs/val_predictions_context.png", dpi=150, bbox_inches="tight")
+    print("  Saved: outputs/val_predictions_context.png")
+
+    # ── Figure 2: IBM stock-price style — val only ────────────────────────────
+    fig2, axes2 = plt.subplots(4, 1, figsize=(14, 18))
+    fig2.suptitle("Transformer — Real vs Predicted (val 20% only)", fontsize=13)
+    for i, num in enumerate(range(1, 5)):
+        arr, cols, preds, val_start, sidx = results[num]
+        ax = axes2[i]
+        if len(preds) == 0:
+            ax.set_title(f"train{num} — no predictions"); continue
+        n      = len(preds)
+        actual = arr[val_start:val_start + n, sidx]
+        rmse   = np.sqrt(((preds[:, sidx] - actual)**2).mean())
+        ax.plot(actual,         color="red",  lw=1.2, label=f"Real sensor value (train{num} val)")
+        ax.plot(preds[:, sidx], color="blue", lw=1.2, label=f"Predicted (train{num} val)")
+        ax.set_title(f"train{num}  |  sensor: {cols[sidx][:35]}  |  RMSE = {rmse:.4f}", fontsize=10)
+        ax.set_xlabel("Time (val timesteps)"); ax.set_ylabel("Normalised sensor value")
+        ax.legend(fontsize=9)
+    fig2.tight_layout()
+    fig2.savefig("outputs/val_predictions_comparison.png", dpi=150, bbox_inches="tight")
+    print("  Saved: outputs/val_predictions_comparison.png")
+    plt.close("all")
+
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -284,3 +387,7 @@ if __name__ == "__main__":
     print("\nSaved:")
     print("  outputs/transformer_twin.pt      (model + errors)")
     print("  outputs/transformer_metrics.json (RMSE metrics)")
+
+    # ── 6. Plot val predictions ────────────────────────────────────────────────
+    print("\nGenerating val prediction plots ...")
+    plot_val_predictions(model, norm, device)
