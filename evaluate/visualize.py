@@ -8,7 +8,7 @@ Plots:
     4. ISO Forest anomaly score distribution
 
 Run:
-    python visualize.py
+    python evaluate/visualize.py
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from pathlib import Path
 from sklearn.decomposition import PCA
 from sklearn.ensemble import IsolationForest
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from models.transformer_model import TransformerSeq2Seq
 from utils.prep import twin
 
