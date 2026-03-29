@@ -27,24 +27,9 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))  # add project root to path
-from utils.prep import twin
-from utils.eval  import evaluate_twin
 from utils.data_loader import load_merged, identify_common_constants
 
-# ── Data ──────────────────────────────────────────────────────────────────────
-# stride=60 keeps memory manageable; stride=1 → OOM on 300s windows
-data    = twin(input_len=300, target_len=180, stride=60)
-X_train = data["X_train"]        # (N, 300, F)  encoder input — normal only
-Y_train = data["Y_train"]        # (N, 180, F)  decoder target
-X_val   = data["X_val"]          # (M, 300, F)  last 20% of each train file
-Y_val   = data["Y_val"]          # (M, 180, F)
-X_test  = data["X_test"]         # (K, 300, F)  test2 held-out
-Y_test  = data["Y_test"]         # (K, 180, F)
-y_test  = data["y_test_labels"]  # (K,)  0=normal 1=attack
-norm    = data["norm"]           # fitted normalizer — pass to ISO Forest
-
 # ── Hyperparameters ───────────────────────────────────────────────────────────
-N_FEAT   = X_train.shape[2]   # dynamic: actual sensor count after constant deletion
 D_MODEL  = 256
 N_HEADS  = 8
 N_LAYERS = 4
@@ -89,7 +74,7 @@ class TransformerSeq2Seq(nn.Module):
     No attack-type conditioning — learns purely from sensor values.
     Anomaly detection via reconstruction error: high error on test2 = attack.
     """
-    def __init__(self, n_features=N_FEAT, d_model=128, n_heads=8,
+    def __init__(self, n_features, d_model=128, n_heads=8,
                  n_layers=3, ffn_dim=512, dropout=0.1):
         super().__init__()
         self.input_proj  = nn.Linear(n_features, d_model)
@@ -250,14 +235,16 @@ def make_predict_fn(model, batch_size=BATCH):
 META_COLS_PLOT = {"timestamp", "attack", "label", "attack_p1", "attack_p2", "attack_p3"}
 TRAIN_FRAC_PLOT = 0.8
 
-def plot_val_predictions(model: "TransformerSeq2Seq", fitted_norm, device):
+def plot_val_predictions(model: "TransformerSeq2Seq", fitted_norm, device,
+                         enc_len: int = 300, dec_len: int = 180,
+                         model_name: str = "Transformer Seq2Seq"):
     """
     Generate two evaluation plots using only the val 20% of each train file.
     No test data used.
 
     Outputs:
-        outputs/val_predictions_context.png    — full file + predicted val overlay
-        outputs/val_predictions_comparison.png — IBM-style actual (red) vs predicted (blue)
+        outputs/plots/val_predictions_context.png    — full file + predicted val overlay
+        outputs/plots/val_predictions_comparison.png — IBM-style actual (red) vs predicted (blue)
     """
     plt.style.use("fivethirtyeight")
     const_hai, const_hiend, hiend_dups = identify_common_constants()
@@ -269,9 +256,6 @@ def plot_val_predictions(model: "TransformerSeq2Seq", fitted_norm, device):
         cols = [c for c in df.columns if c not in META_COLS_PLOT and df[c].dtype != object]
         arr  = fitted_norm.transform(df)[cols].values.astype(np.float32)
         return arr, cols
-
-    enc_len = X_train.shape[1]   # 300 — reuse the module-level loaded data shapes
-    dec_len = Y_train.shape[1]   # 180
 
     @torch.no_grad()
     def _predict_val(arr):
@@ -301,7 +285,7 @@ def plot_val_predictions(model: "TransformerSeq2Seq", fitted_norm, device):
 
     # ── Figure 1: full-file context ───────────────────────────────────────────
     fig1, axes1 = plt.subplots(4, 1, figsize=(16, 20))
-    fig1.suptitle("Transformer — val predictions in context\n"
+    fig1.suptitle(f"{model_name} — val predictions in context\n"
                   "(blue = actual full file · orange = predicted last 20%)", fontsize=13)
     for i, num in enumerate(range(1, 5)):
         arr, cols, preds, val_start, sidx = results[num]
@@ -319,12 +303,12 @@ def plot_val_predictions(model: "TransformerSeq2Seq", fitted_norm, device):
         ax.set_xlabel("timestep"); ax.set_ylabel("normalised value")
         ax.legend(fontsize=9)
     fig1.tight_layout()
-    fig1.savefig("outputs/val_predictions_context.png", dpi=150, bbox_inches="tight")
-    print("  Saved: outputs/val_predictions_context.png")
+    fig1.savefig("outputs/plots/val_predictions_context.png", dpi=150, bbox_inches="tight")
+    print("  Saved: outputs/plots/val_predictions_context.png")
 
     # ── Figure 2: IBM stock-price style — val only ────────────────────────────
     fig2, axes2 = plt.subplots(4, 1, figsize=(14, 18))
-    fig2.suptitle("Transformer — Real vs Predicted (val 20% only)", fontsize=13)
+    fig2.suptitle(f"{model_name} — Real vs Predicted (val 20% only)", fontsize=13)
     for i, num in enumerate(range(1, 5)):
         arr, cols, preds, val_start, sidx = results[num]
         ax = axes2[i]
@@ -339,55 +323,8 @@ def plot_val_predictions(model: "TransformerSeq2Seq", fitted_norm, device):
         ax.set_xlabel("Time (val timesteps)"); ax.set_ylabel("Normalised sensor value")
         ax.legend(fontsize=9)
     fig2.tight_layout()
-    fig2.savefig("outputs/val_predictions_comparison.png", dpi=150, bbox_inches="tight")
-    print("  Saved: outputs/val_predictions_comparison.png")
+    fig2.savefig("outputs/plots/val_predictions_comparison.png", dpi=150, bbox_inches="tight")
+    print("  Saved: outputs/plots/val_predictions_comparison.png")
     plt.close("all")
 
 
-# ── Run ───────────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-
-    # ── 1. Build model ────────────────────────────────────────────────────────
-    model = TransformerSeq2Seq(
-        n_features=N_FEAT, d_model=D_MODEL, n_heads=N_HEADS,
-        n_layers=N_LAYERS, ffn_dim=FFN_DIM, dropout=DROPOUT,
-    ).to(device)
-    print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
-
-    # ── 2. Train ──────────────────────────────────────────────────────────────
-    model = train(model, X_train, Y_train, X_val, Y_val)
-
-    # ── 3. Evaluate as simulator (RMSE) — eTaPR belongs to ISO Forest ─────────
-    results = evaluate_twin(
-        predict_fn=make_predict_fn(model),
-        X_val=X_val, Y_val=Y_val,
-        X_test=X_test, Y_test=Y_test, y_test=y_test,
-        label="Transformer Seq2Seq",
-        save_path="outputs/transformer_metrics.json",
-    )
-
-    # ── 4. Compute per-sensor errors → for ISO Forest ─────────────────────────
-    print("\nComputing per-sensor reconstruction errors for ISO Forest...")
-    train_errors = model.reconstruction_errors(X_train, Y_train)   # (N, 277)
-    test_errors  = model.reconstruction_errors(X_test,  Y_test)    # (K, 277)
-    print(f"  train_errors {train_errors.shape}")
-    print(f"  test_errors  {test_errors.shape}")
-
-    # ── 5. Save ───────────────────────────────────────────────────────────────
-    torch.save({
-        "model_state":  model.state_dict(),
-        "train_errors": train_errors,
-        "test_errors":  test_errors,
-        "y_test":       y_test,
-        "metrics":      results,
-    }, "outputs/transformer_twin.pt")
-
-    print("\nSaved:")
-    print("  outputs/transformer_twin.pt      (model + errors)")
-    print("  outputs/transformer_metrics.json (RMSE metrics)")
-
-    # ── 6. Plot val predictions ────────────────────────────────────────────────
-    print("\nGenerating val prediction plots ...")
-    plot_val_predictions(model, norm, device)

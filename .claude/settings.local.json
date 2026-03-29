@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C \"c:/Users/ahmma/Desktop/farah/hai-digital-twin\" add -A)",
+      "Bash(git -C \"c:/Users/ahmma/Desktop/farah/hai-digital-twin\" status)"
+    ]
+  }
+}
