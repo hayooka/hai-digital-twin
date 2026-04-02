@@ -2,7 +2,7 @@ from __future__ import annotations
 import os
 import pandas as pd
 
-_CSV_PATH = os.path.join(os.path.dirname(__file__), "test_data.csv")
+_CSV_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "data", "test_data.csv")
 
 _timetable: pd.DataFrame | None = None
 

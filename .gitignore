@@ -9,6 +9,10 @@ data/splits/
 *.pkl
 *.pickle
 
+# Large binary arrays
+*.npy
+*.npz
+
 # Model checkpoints
 *.pt
 *.pth

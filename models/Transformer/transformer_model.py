@@ -26,8 +26,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))  # add project root to path
-from utils.data_loader import load_merged, identify_common_constants
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))  # add project root to path
+from data_loaderold import load_merged, identify_common_constants
 
 # ── Hyperparameters ───────────────────────────────────────────────────────────
 D_MODEL  = 256
