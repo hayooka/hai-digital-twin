@@ -17,12 +17,10 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "02_data_pipeline"))
 sys.path.insert(0, str(ROOT / "03_model"))
-sys.path.insert(0, str(ROOT / "04_evaluate"))
 
 from scaled_split  import load_and_prepare_episodic
-from transformer   import TransformerSeq2Seq, plot_val_predictions
+from transformer   import TransformerSeq2Seq
 from causal_loss   import CausalLoss
-from eval          import evaluate_twin
 
 # ── Config ────────────────────────────────────────────────────────────────────
 D_MODEL  = 256
@@ -50,7 +48,7 @@ data = load_and_prepare_episodic(input_len=300, target_len=180, stride=60)
 # Extract data
 X_train        = data["X_train"]            # (N, 300, F)
 Y_train        = data["y_train"]            # (N, 180, F)
-scenario_train = data["attack_train_labels"] # (N,) 0=normal, 1=attack
+scenario_train = data["scenario_train"]      # (N,) 0=normal, 1-4=attack class
 
 X_val          = data["X_val"]              # (M, 300, F)
 Y_val          = data["y_val"]              # (M, 180, F)
@@ -58,9 +56,9 @@ Y_val          = data["y_val"]              # (M, 180, F)
 X_test         = data["X_test"]             # (K, 300, F)
 Y_test         = data["y_test"]             # (K, 180, F)
 y_test         = data["attack_test_labels"] # (K,) binary: 0=normal, 1=attack
-scenario_test  = y_test                     # same for now (binary conditioning)
+scenario_test  = data["scenario_test"]      # (K,) 0-4 for model conditioning
 
-N_SCENARIOS    = 2                          # 0=normal, 1=attack
+N_SCENARIOS    = data["n_scenarios"]        # 4: normal, AP_no, AP_comb, AE_no
 sensor_cols    = data["sensor_cols"]
 N_FEAT         = X_train.shape[2]
 
@@ -83,7 +81,7 @@ model = TransformerSeq2Seq(
 print(f"  Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
 # ── 3. Causal loss ────────────────────────────────────────────────────────────
-causal = CausalLoss("outputs/causal_graph/parents.json", sensor_cols)
+causal = CausalLoss("outputs/causal_graph/parents_full.json", sensor_cols)
 
 # ── 4. Train ──────────────────────────────────────────────────────────────────
 print(f"\nStep 3: Training for {EPOCHS} epochs...")
@@ -137,45 +135,12 @@ model.load_state_dict(best_state)
 print(f"  Best val loss: {best_val:.5f}")
 
 # ── 5. Evaluate ───────────────────────────────────────────────────────────────
-print("\nStep 4: Evaluating...")
-model.eval()
-
-def predict_fn(X: np.ndarray, Y: np.ndarray,
-               scenario: np.ndarray | None = None) -> np.ndarray:
-    preds = []
-    with torch.no_grad():
-        for i in range(0, len(X), BATCH):
-            src    = torch.tensor(X[i:i+BATCH]).float().to(device)
-            tgt    = torch.tensor(Y[i:i+BATCH]).float().to(device)
-            sc     = torch.tensor(scenario[i:i+BATCH]).long().to(device) if scenario is not None else None
-            dec_in = torch.cat([src[:, -1:, :], tgt[:, :-1, :]], dim=1)
-            preds.append(model(src, dec_in, sc).cpu().numpy())
-    return np.concatenate(preds, axis=0)
-
-# val uses scenario=0 (all normal), test uses actual scenario labels
-val_scenario = np.zeros(len(X_val), dtype=np.int32)
-
-metrics = evaluate_twin(
-    predict_fn=lambda X, Y: predict_fn(X, Y, val_scenario[:len(X)]),
-    X_val=X_val, Y_val=Y_val,
-    X_test=X_test, Y_test=Y_test,
-    y_test=y_test,
-    save_path="outputs/transformer_metrics.json",
-)
-rmse_val  = metrics["rmse_val"]
-rmse_test = metrics["rmse_test_normal"]
-
-# ── 6. Save ───────────────────────────────────────────────────────────────────
+# ── 5. Save ───────────────────────────────────────────────────────────────────
 torch.save({
     "model_state": model.state_dict(),
     "n_feat":      N_FEAT,
     "n_scenarios": N_SCENARIOS,
     "sensor_cols": sensor_cols,
-    "metrics":     {"rmse_val": rmse_val, "rmse_test": rmse_test},
 }, "outputs/models/transformer.pt")
 print("\nSaved: outputs/models/transformer.pt")
-
-# ── 7. Plot ───────────────────────────────────────────────────────────────────
-print("\nStep 5: Plotting val predictions...")
-plot_val_predictions(model, X_val, Y_val, sensor_cols, device,
-                     dec_len=DEC_LEN, model_name="HAI Digital Twin Transformer")
+print("Run `python 04_evaluate/run_eval.py` to evaluate and plot.")

@@ -19,7 +19,8 @@
       "Bash(rm -rf notebooks/train1-4/)",
       "Bash(rmdir notebooks/)",
       "Bash(conda run -n base python -c ':*)",
-      "Bash(python3 -c ':*)"
+      "Bash(python3 -c ':*)",
+      "Bash(\"/c/Users/ahmma/anaconda3/envs/digital_twin/python.exe\" 04_evaluate/run_eval.py)"
     ]
   }
 }

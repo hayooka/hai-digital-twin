@@ -69,7 +69,8 @@ class TransformerSeq2Seq(nn.Module):
     Loss:    MSE + λ * causal_loss
 
     Scenario conditioning: a learned embedding for each scenario class
-    (0=normal, 1=AP, 2=AE, 3=combined) is added to the encoder input,
+    (0=normal, 1=AP_no_combination, 2=AP_with_combination, 3=AE_no_combination)
+
     so the model can simulate different attack trajectories.
     """
     def __init__(self, n_features, d_model=128, n_heads=8,

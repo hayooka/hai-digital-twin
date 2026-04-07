@@ -1,10 +1,10 @@
 """
 causal_loss.py
 Causal penalty: predicted sensor values should follow parent relationships
-defined in outputs/causal_graph/parents.json (built from boiler/dcs_*.json).
+defined in outputs/causal_graph/parents_full.json (built from boiler/dcs_*.json).
 
 Usage:
-    causal = CausalLoss("outputs/causal_graph/parents.json", sensor_cols)
+    causal = CausalLoss("outputs/causal_graph/parents_full.json", sensor_cols)
     loss   = mse_loss + lambda_ * causal(pred)   # pred: (B, T, F)
 """
 

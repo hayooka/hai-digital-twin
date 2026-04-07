@@ -37,14 +37,38 @@ ATTACK_SPLIT_RATIO = 0.80          # 80% attacks to train, 20% to test
 BEFORE_ATTACK_SEC  = 300
 AFTER_ATTACK_SEC   = 180
 RANDOM_SEED        = 42
-SEQ_LENGTH         = 512           # Input sequence length (past timesteps)
-STRIDE             = 256           # Sliding window stride
+INPUT_LEN          = 300           # Default input sequence length
+TARGET_LEN         = 180           # Default target sequence length  
+STRIDE             = 60            # Default sliding window stride
 
 META_COLS = {
     "timestamp", "label",
     "attack_id", "scenario", "attack_type", "combination",
     "target_controller", "target_points", "duration_sec",
+    "episode_id", "source_file", "scenario_label",   # added cols, must not be model features
 }
+
+
+# ── Attack type to scenario label mapping ──────────────────────────────────────
+
+def get_scenario_label(attack_type: str, combination: str = "no") -> int:
+    """
+    Map attack_type + combination to scenario label.
+    
+    Returns:
+        0: normal
+        1: AP without combination  
+        2: AP with combination
+        3: AE without combination
+        4: AE with combination
+    """
+    if pd.isna(attack_type) or attack_type == "normal":
+        return 0
+    if attack_type == "AP":
+        return 1 if str(combination).strip().lower() == "no" else 2
+    if attack_type == "AE":
+        return 3 if str(combination).strip().lower() == "no" else 4
+    return 0  # fallback
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -67,7 +91,7 @@ def _extract_attack_segments(df: pd.DataFrame,
                               after_sec: int = 180) -> list[pd.DataFrame]:
     """
     Extract attack segments with context windows.
-    Returns list of DataFrames, each containing one attack + context.
+    Adds 'scenario_label' column to each segment.
     """
     if "label" not in df.columns or not (df["label"] > 0).any():
         return []
@@ -92,6 +116,17 @@ def _extract_attack_segments(df: pd.DataFrame,
         lo = max(0, start - before_sec)
         hi = min(len(df) - 1, end + after_sec)
         segment = df.iloc[lo:hi + 1].copy().reset_index(drop=True)
+        
+        # Get the attack type from the first attack row
+        attack_rows = segment[segment['label'] > 0]
+        if len(attack_rows) > 0:
+            attack_type = attack_rows.iloc[0]['attack_type']
+            combination = attack_rows.iloc[0].get('combination', 'no')
+            scenario_label = get_scenario_label(attack_type, combination)
+        else:
+            scenario_label = 0
+        
+        segment['scenario_label'] = scenario_label
         segments.append(segment)
 
     return segments
@@ -105,28 +140,15 @@ def create_forecasting_windows(
     stride: int,
     scaler: Optional[StandardScaler] = None,
     episode_id: str = ""
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[str]]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, List[str]]:
     """
     Create sliding windows for time series forecasting.
-    
-    For each window:
-    - X: past input_len timesteps (input to model)
-    - y: next target_len timesteps (what to predict)
-    - attack_labels: 1 if ANY attack occurs in the target window
-    
-    Args:
-        df: DataFrame from ONE file only
-        sensor_cols: List of sensor column names
-        input_len: Number of past timesteps to use as input
-        target_len: Number of future timesteps to predict
-        stride: Steps to slide the window
-        scaler: Fitted StandardScaler
-        episode_id: Identifier for this episode
-    
+
     Returns:
         X: (n_windows, input_len, n_features)
         y: (n_windows, target_len, n_features)
-        attack_labels: (n_windows,) - 1 if attack in target window
+        attack_flags: (n_windows,) - 1 if attack in target window (binary)
+        scenario_labels: (n_windows,) - 0-4 multi-class labels
         metadata: List of window identifiers
     """
     total_length = input_len + target_len
@@ -135,6 +157,7 @@ def create_forecasting_windows(
         return (
             np.empty((0, input_len, len(sensor_cols)), dtype=np.float32),
             np.empty((0, target_len, len(sensor_cols)), dtype=np.float32),
+            np.empty(0, dtype=np.int32),
             np.empty(0, dtype=np.int32),
             []
         )
@@ -148,7 +171,11 @@ def create_forecasting_windows(
     windows_X = []
     windows_y = []
     attack_flags = []
+    scenario_labels = []
     metadata = []
+    
+    # Check if scenario_label column exists (for attack segments)
+    has_scenario = 'scenario_label' in df.columns
     
     for i in range(0, len(df) - total_length + 1, stride):
         # Input: past input_len steps
@@ -160,15 +187,29 @@ def create_forecasting_windows(
         # Check if attack occurs in the target window
         attack_in_target = (df['label'].iloc[i + input_len:i + input_len + target_len] > 0).any()
         
+        # Get scenario label (0 for normal, 1-4 for different attacks)
+        if has_scenario and attack_in_target:
+            # Use the scenario_label from the attack segment
+            target_scenarios = df['scenario_label'].iloc[i + input_len:i + input_len + target_len]
+            attack_scenarios = target_scenarios[target_scenarios > 0]
+            if len(attack_scenarios) > 0:
+                window_scenario = attack_scenarios.mode()[0]  # Most common scenario in target window
+            else:
+                window_scenario = 0
+        else:
+            window_scenario = 0
+        
         windows_X.append(X_window)
         windows_y.append(y_window)
         attack_flags.append(1 if attack_in_target else 0)
+        scenario_labels.append(window_scenario)
         metadata.append(f"{episode_id}_pos{i}")
     
     return (
         np.array(windows_X, dtype=np.float32),
         np.array(windows_y, dtype=np.float32),
         np.array(attack_flags, dtype=np.int32),
+        np.array(scenario_labels, dtype=np.int32),
         metadata
     )
 
@@ -183,8 +224,8 @@ def load_and_prepare_episodic(
     before_attack_sec: int = BEFORE_ATTACK_SEC,
     after_attack_sec: int = AFTER_ATTACK_SEC,
     random_seed: int = RANDOM_SEED,
-    input_len: int = SEQ_LENGTH,
-    target_len: int = 180,
+    input_len: int = INPUT_LEN,
+    target_len: int = TARGET_LEN,
     stride: int = STRIDE,
     save_windows: bool = True
 ) -> Dict:
@@ -221,6 +262,9 @@ def load_and_prepare_episodic(
             print(f"  Sensor features: {len(sensor_cols)}")
             print(f"  Sample sensors: {sensor_cols[:5]}")
         
+        # Add scenario_label column (all 0 for normal data)
+        df['scenario_label'] = 0
+        
         # Temporal split within episode
         cut = int(len(df) * train_ratio)
         train_part = df.iloc[:cut].copy()
@@ -242,6 +286,7 @@ def load_and_prepare_episodic(
     
     train4_df = _load(os.path.join(processed_dir, f"train4.csv"))
     train4_df['episode_id'] = "train4_TEST"
+    train4_df['scenario_label'] = 0  # Normal data
     print(f"  train4: {len(train4_df):,} rows (COMPLETELY UNSEEN during training)")
     
     # ── Step 3: Extract attack segments from test1 + test2 ────────────────────
@@ -261,7 +306,8 @@ def load_and_prepare_episodic(
             all_attack_segments.append(segment)
             
             attack_types = segment[segment['label'] > 0]['attack_type'].unique()
-            print(f"  test{n}_segment{seg_idx}: {len(segment):,} rows, attack_types={attack_types}")
+            scenario_label = segment['scenario_label'].iloc[0] if len(segment) > 0 else 0
+            print(f"  test{n}_segment{seg_idx}: {len(segment):,} rows, attack_types={attack_types}, scenario_label={scenario_label}")
         
         print(f"  test{n}: total {len(segments)} segments")
     
@@ -319,29 +365,38 @@ def load_and_prepare_episodic(
     train_normal_windows = []
     for episode in train_episodes:
         ep_id = episode['episode_id'].iloc[0]
-        X, y, attack_labels, meta = create_forecasting_windows(
+        X, y, attack_labels, scenario_labels, meta = create_forecasting_windows(
             episode, sensor_cols, input_len, target_len, stride, scaler, ep_id
         )
         if len(X) > 0:
             train_normal_windows.append({
-                'X': X, 'y': y, 'attack_labels': attack_labels, 
-                'metadata': meta, 'episode_id': ep_id
+                'X': X, 
+                'y': y, 
+                'attack_labels': attack_labels,
+                'scenario_labels': scenario_labels,
+                'metadata': meta, 
+                'episode_id': ep_id
             })
             n_attack_windows = attack_labels.sum()
-            print(f"    {ep_id}: {len(X)} windows (attack_in_target={n_attack_windows})")
+            unique_scenarios = np.unique(scenario_labels)
+            print(f"    {ep_id}: {len(X)} windows (attack_in_target={n_attack_windows}, scenarios={unique_scenarios})")
     
     # Process validation normal episodes (train1-3, 20% portions)
     print("\n  VALIDATION NORMAL (from train1-3, 20% portions):")
     val_normal_windows = []
     for episode in val_episodes:
         ep_id = episode['episode_id'].iloc[0]
-        X, y, attack_labels, meta = create_forecasting_windows(
+        X, y, attack_labels, scenario_labels, meta = create_forecasting_windows(
             episode, sensor_cols, input_len, target_len, stride, scaler, ep_id
         )
         if len(X) > 0:
             val_normal_windows.append({
-                'X': X, 'y': y, 'attack_labels': attack_labels,
-                'metadata': meta, 'episode_id': ep_id
+                'X': X, 
+                'y': y, 
+                'attack_labels': attack_labels,
+                'scenario_labels': scenario_labels,
+                'metadata': meta, 
+                'episode_id': ep_id
             })
             n_attack_windows = attack_labels.sum()
             print(f"    {ep_id}: {len(X)} windows (attack_in_target={n_attack_windows})")
@@ -351,47 +406,61 @@ def load_and_prepare_episodic(
     attack_train_windows = []
     for episode in attack_train_segments:
         ep_id = episode['episode_id'].iloc[0]
-        X, y, attack_labels, meta = create_forecasting_windows(
+        X, y, attack_labels, scenario_labels, meta = create_forecasting_windows(
             episode, sensor_cols, input_len, target_len, stride, scaler, ep_id
         )
         if len(X) > 0:
             attack_train_windows.append({
-                'X': X, 'y': y, 'attack_labels': attack_labels,
-                'metadata': meta, 'episode_id': ep_id
+                'X': X, 
+                'y': y, 
+                'attack_labels': attack_labels,
+                'scenario_labels': scenario_labels,
+                'metadata': meta, 
+                'episode_id': ep_id
             })
             n_attack_windows = attack_labels.sum()
-            print(f"    {ep_id}: {len(X)} windows (attack_in_target={n_attack_windows})")
+            unique_scenarios = np.unique(scenario_labels)
+            print(f"    {ep_id}: {len(X)} windows (attack_in_target={n_attack_windows}, scenarios={unique_scenarios})")
     
     # Process TEST normal (train4 - completely unseen!)
     print("\n  TEST NORMAL (train4 - COMPLETELY UNSEEN during training):")
     test_normal_windows = []
-    X_test_normal, y_test_normal, attack_labels_normal, meta_test_normal = create_forecasting_windows(
+    X_test_normal, y_test_normal, attack_labels_normal, scenario_labels_normal, meta_test_normal = create_forecasting_windows(
         train4_df, sensor_cols, input_len, target_len, stride, scaler, "train4_TEST"
     )
     if len(X_test_normal) > 0:
         test_normal_windows.append({
-            'X': X_test_normal, 'y': y_test_normal, 
+            'X': X_test_normal, 
+            'y': y_test_normal, 
             'attack_labels': attack_labels_normal,
-            'metadata': meta_test_normal, 'episode_id': "train4_TEST"
+            'scenario_labels': scenario_labels_normal,
+            'metadata': meta_test_normal, 
+            'episode_id': "train4_TEST"
         })
         n_attack_windows = attack_labels_normal.sum()
-        print(f"    train4_TEST: {len(X_test_normal)} windows (attack_in_target={n_attack_windows}) - CAUSAL GENERALIZATION TEST")
+        unique_scenarios = np.unique(scenario_labels_normal)
+        print(f"    train4_TEST: {len(X_test_normal)} windows (attack_in_target={n_attack_windows}, scenarios={unique_scenarios}) - CAUSAL GENERALIZATION TEST")
     
     # Process TEST attack (20% of attack segments)
     print("\n  TEST ATTACK (20% of attack segments):")
     attack_test_windows = []
     for episode in attack_test_segments:
         ep_id = episode['episode_id'].iloc[0]
-        X, y, attack_labels, meta = create_forecasting_windows(
+        X, y, attack_labels, scenario_labels, meta = create_forecasting_windows(
             episode, sensor_cols, input_len, target_len, stride, scaler, ep_id
         )
         if len(X) > 0:
             attack_test_windows.append({
-                'X': X, 'y': y, 'attack_labels': attack_labels,
-                'metadata': meta, 'episode_id': ep_id
+                'X': X, 
+                'y': y, 
+                'attack_labels': attack_labels,
+                'scenario_labels': scenario_labels,
+                'metadata': meta, 
+                'episode_id': ep_id
             })
             n_attack_windows = attack_labels.sum()
-            print(f"    {ep_id}: {len(X)} windows (attack_in_target={n_attack_windows})")
+            unique_scenarios = np.unique(scenario_labels)
+            print(f"    {ep_id}: {len(X)} windows (attack_in_target={n_attack_windows}, scenarios={unique_scenarios})")
     
     # ── Step 7: Combine all windows (always create arrays) ────────────────────
     print("\n" + "="*70)
@@ -404,20 +473,24 @@ def load_and_prepare_episodic(
         X_train = np.concatenate([w['X'] for w in all_train_windows], axis=0)
         y_train = np.concatenate([w['y'] for w in all_train_windows], axis=0)
         attack_train_labels = np.concatenate([w['attack_labels'] for w in all_train_windows], axis=0)
+        scenario_train = np.concatenate([w['scenario_labels'] for w in all_train_windows], axis=0)
     else:
         X_train = np.empty((0, input_len, len(sensor_cols)), dtype=np.float32)
         y_train = np.empty((0, target_len, len(sensor_cols)), dtype=np.float32)
         attack_train_labels = np.empty(0, dtype=np.int32)
+        scenario_train = np.empty(0, dtype=np.int32)
     
     # Validation windows (normal only)
     if val_normal_windows:
         X_val = np.concatenate([w['X'] for w in val_normal_windows], axis=0)
         y_val = np.concatenate([w['y'] for w in val_normal_windows], axis=0)
         attack_val_labels = np.concatenate([w['attack_labels'] for w in val_normal_windows], axis=0)
+        scenario_val = np.concatenate([w['scenario_labels'] for w in val_normal_windows], axis=0)
     else:
         X_val = np.empty((0, input_len, len(sensor_cols)), dtype=np.float32)
         y_val = np.empty((0, target_len, len(sensor_cols)), dtype=np.float32)
         attack_val_labels = np.empty(0, dtype=np.int32)
+        scenario_val = np.empty(0, dtype=np.int32)
     
     # Test windows (normal from train4 + attack segments)
     all_test_windows = test_normal_windows + attack_test_windows
@@ -425,10 +498,15 @@ def load_and_prepare_episodic(
         X_test = np.concatenate([w['X'] for w in all_test_windows], axis=0)
         y_test = np.concatenate([w['y'] for w in all_test_windows], axis=0)
         attack_test_labels = np.concatenate([w['attack_labels'] for w in all_test_windows], axis=0)
+        scenario_test = np.concatenate([w['scenario_labels'] for w in all_test_windows], axis=0)
     else:
         X_test = np.empty((0, input_len, len(sensor_cols)), dtype=np.float32)
         y_test = np.empty((0, target_len, len(sensor_cols)), dtype=np.float32)
         attack_test_labels = np.empty(0, dtype=np.int32)
+        scenario_test = np.empty(0, dtype=np.int32)
+    
+    # Get number of unique scenarios
+    n_scenarios = 4  # 0=normal, 1=AP_no, 2=AP_comb, 3=AE_no
     
     # ── Save to disk if requested ────────────────────────────────────────────
     if save_windows:
@@ -438,15 +516,21 @@ def load_and_prepare_episodic(
         
         np.savez_compressed(
             os.path.join(output_dir, "train_data.npz"),
-            X=X_train, y=y_train, attack_labels=attack_train_labels
+            X=X_train, y=y_train, 
+            attack_labels=attack_train_labels,
+            scenario_labels=scenario_train
         )
         np.savez_compressed(
             os.path.join(output_dir, "val_data.npz"),
-            X=X_val, y=y_val, attack_labels=attack_val_labels
+            X=X_val, y=y_val, 
+            attack_labels=attack_val_labels,
+            scenario_labels=scenario_val
         )
         np.savez_compressed(
             os.path.join(output_dir, "test_data.npz"),
-            X=X_test, y=y_test, attack_labels=attack_test_labels
+            X=X_test, y=y_test, 
+            attack_labels=attack_test_labels,
+            scenario_labels=scenario_test
         )
         
         # Also save metadata
@@ -456,6 +540,13 @@ def load_and_prepare_episodic(
             'target_len': target_len,
             'stride': stride,
             'n_features': len(sensor_cols),
+            'n_scenarios': n_scenarios,
+            'scenario_mapping': {
+                0: 'normal',
+                1: 'AP_no_combination',
+                2: 'AP_with_combination',
+                3: 'AE_no_combination',
+            },
             'train_files_used': ['train1', 'train2', 'train3'],
             'test_files_used': ['train4'],
             'n_attack_segments_train': len(attack_train_segments),
@@ -467,7 +558,7 @@ def load_and_prepare_episodic(
         print(f"    train_data.npz: X={X_train.shape}, y={y_train.shape}")
         print(f"    val_data.npz:   X={X_val.shape}, y={y_val.shape}")
         print(f"    test_data.npz:  X={X_test.shape}, y={y_test.shape}")
-        print(f"    metadata.pkl:   saved")
+        print(f"    metadata.pkl:   saved (n_scenarios={n_scenarios})")
     
     # ── Final Summary ─────────────────────────────────────────────────────────
     print("\n" + "="*70)
@@ -478,7 +569,7 @@ def load_and_prepare_episodic(
     print(f"    - train1, train2, train3 (80% portions each)")
     print(f"    - {len(attack_train_segments)} attack segments (80% of total)")
     print(f"    - X_train shape: {X_train.shape}")
-    print(f"    - Windows with attacks in target: {attack_train_labels.sum():,} ({100*attack_train_labels.sum()/len(attack_train_labels):.1f}%)" if len(attack_train_labels) > 0 else "")
+    print(f"    - Scenario distribution: {dict(zip(*np.unique(scenario_train, return_counts=True)))}" if len(scenario_train) > 0 else "")
     
     print("\n  VALIDATION SET (for early stopping/hyperparameters):")
     print(f"    - train1, train2, train3 (20% portions each)")
@@ -488,8 +579,9 @@ def load_and_prepare_episodic(
     print(f"    - train4 (100%) → Tests causal generalization across periods")
     print(f"    - {len(attack_test_segments)} attack segments (20% of total) → Tests attack prediction")
     print(f"    - X_test shape: {X_test.shape}")
-    print(f"    - Windows with attacks in target: {attack_test_labels.sum():,} ({100*attack_test_labels.sum()/len(attack_test_labels):.1f}%)" if len(attack_test_labels) > 0 else "")
+    print(f"    - Scenario distribution: {dict(zip(*np.unique(scenario_test, return_counts=True)))}" if len(scenario_test) > 0 else "")
     
+    print(f"\n  Number of scenario classes: {n_scenarios}")
     print("\n  ✓ train4 was NEVER seen during training")
     print("  ✓ train4 was NOT used for fitting the scaler")
     print("  ✓ If RMSE on train4 ≈ RMSE on val → model learned causal relationships")
@@ -500,12 +592,16 @@ def load_and_prepare_episodic(
         'X_train': X_train,
         'y_train': y_train,
         'attack_train_labels': attack_train_labels,
+        'scenario_train': scenario_train,
         'X_val': X_val,
         'y_val': y_val,
         'attack_val_labels': attack_val_labels,
+        'scenario_val': scenario_val,
         'X_test': X_test,
         'y_test': y_test,
         'attack_test_labels': attack_test_labels,
+        'scenario_test': scenario_test,
+        'n_scenarios': n_scenarios,
         'sensor_cols': sensor_cols,
         'scaler': scaler,
         'input_len': input_len,
@@ -531,3 +627,4 @@ if __name__ == "__main__":
     print(f"  Train on: {data['X_train'].shape[0]:,} windows")
     print(f"  Validate on: {data['X_val'].shape[0]:,} windows")
     print(f"  Test on: {data['X_test'].shape[0]:,} windows")
+    print(f"  Scenario classes: {data['n_scenarios']}")

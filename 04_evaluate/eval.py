@@ -78,6 +78,6 @@ def evaluate_twin(
         Path(save_path).parent.mkdir(parents=True, exist_ok=True)
         with open(save_path, "w") as f:
             json.dump(results, f, indent=2)
-        print(f"  Saved → {save_path}")
+        print(f"  Saved: {save_path}")
 
     return results
