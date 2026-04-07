@@ -3,7 +3,23 @@
     "allow": [
       "Bash(git -C \"c:/Users/ahmma/Desktop/farah/hai-digital-twin\" add -A)",
       "Bash(git -C \"c:/Users/ahmma/Desktop/farah/hai-digital-twin\" status)",
-      "Read(//c/Users/ahmma/Desktop/farah/**)"
+      "Read(//c/Users/ahmma/Desktop/farah/**)",
+      "Bash(python -c ':*)",
+      "Bash(C:/Users/ahmma/anaconda3/envs/digital_twin/python.exe -c ':*)",
+      "Bash(C:/Users/ahmma/anaconda3/envs/digital_twin/python.exe utils/build_causal_graph.py)",
+      "Bash(cp notebooks/attack_label_analysis.ipynb        00_archive/)",
+      "Bash(cp notebooks/attack_transition_analysis.ipynb   00_archive/)",
+      "Bash(cp notebooks/hai_data_analysis.ipynb            00_archive/)",
+      "Bash(cp notebooks/window_size_analysis.ipynb         00_archive/)",
+      "Bash(cp -r notebooks/train1-4                        00_archive/)",
+      "Bash(rm -rf models/ evaluate/ utils/ notebooks/)",
+      "Bash(rm -f graph_analysis.ipynb data_loaderold.py stock_price_lstm_gru.ipynb)",
+      "Bash(rm -rf models/ evaluate/ utils/)",
+      "Bash(rm -f notebooks/attack_label_analysis.ipynb notebooks/attack_transition_analysis.ipynb notebooks/hai_data_analysis.ipynb notebooks/window_size_analysis.ipynb notebooks/causal_graph_discovery.ipynb)",
+      "Bash(rm -rf notebooks/train1-4/)",
+      "Bash(rmdir notebooks/)",
+      "Bash(conda run -n base python -c ':*)",
+      "Bash(python3 -c ':*)"
     ]
   }
 }

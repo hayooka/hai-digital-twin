@@ -16,7 +16,6 @@ Shape: X (N, 300, F) → Y (N, 180, F)   where F = actual sensor count after
 Window size = 300s  (from window_size_analysis notebook).
 """
 
-import sys
 import math
 import numpy as np
 import torch
@@ -25,9 +24,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))  # add project root to path
-from data_loaderold import load_merged, identify_common_constants
 
 # ── Hyperparameters ───────────────────────────────────────────────────────────
 D_MODEL  = 256
@@ -55,6 +51,7 @@ class PositionalEncoding(nn.Module):
         )
         pe[:, 0::2] = torch.sin(pos * div)
         pe[:, 1::2] = torch.cos(pos * div)
+        self.pe: torch.Tensor
         self.register_buffer("pe", pe.unsqueeze(0))   # (1, max_len, d_model)
 
     def forward(self, x):
@@ -69,17 +66,20 @@ class TransformerSeq2Seq(nn.Module):
 
     Encoder: processes 300s of past sensor readings → context (memory)
     Decoder: predicts 180s of future readings from context
-    Loss:    MSE on sensor values
+    Loss:    MSE + λ * causal_loss
 
-    No attack-type conditioning — learns purely from sensor values.
-    Anomaly detection via reconstruction error: high error on test2 = attack.
+    Scenario conditioning: a learned embedding for each scenario class
+    (0=normal, 1=AP, 2=AE, 3=combined) is added to the encoder input,
+    so the model can simulate different attack trajectories.
     """
     def __init__(self, n_features, d_model=128, n_heads=8,
-                 n_layers=3, ffn_dim=512, dropout=0.1):
+                 n_layers=3, ffn_dim=512, dropout=0.1, n_scenarios=4):
         super().__init__()
         self.input_proj  = nn.Linear(n_features, d_model)
         self.output_proj = nn.Linear(d_model, n_features)
         self.pos_enc     = PositionalEncoding(d_model, max_len=512, dropout=dropout)
+        # Type-annotated so Pyright resolves __call__ correctly (fixes __getitem__ error)
+        self.scenario_emb: nn.Embedding = nn.Embedding(n_scenarios, d_model)
 
         enc_layer = nn.TransformerEncoderLayer(
             d_model, n_heads, ffn_dim, dropout,
@@ -92,17 +92,25 @@ class TransformerSeq2Seq(nn.Module):
                                              enable_nested_tensor=False)
         self.decoder = nn.TransformerDecoder(dec_layer, n_layers)
 
-    def encode(self, src):
-        """src: (B, enc_len, n_features) → memory: (B, enc_len, d_model)"""
-        return self.encoder(self.pos_enc(self.input_proj(src)))
+    def encode(self, src, scenario: torch.Tensor | None = None):
+        """
+        src:      (B, enc_len, n_features)
+        scenario: (B,) int tensor with class 0-3, or None → treated as class 0
+        → memory: (B, enc_len, d_model)
+        """
+        h = self.input_proj(src)                          # (B, T, d_model)
+        if scenario is not None:
+            h = h + self.scenario_emb(scenario).unsqueeze(1)  # broadcast over time
+        return self.encoder(self.pos_enc(h))
 
-    def forward(self, src, tgt_in):
+    def forward(self, src, tgt_in, scenario: torch.Tensor | None = None):
         """
-        src:    (B, 300, F)  encoder input (300s context window)
-        tgt_in: (B, 180, F)  teacher-forced decoder input
-        returns (B, 180, F)
+        src:      (B, 300, F)  encoder input
+        tgt_in:   (B, 180, F)  teacher-forced decoder input
+        scenario: (B,) int tensor, values in {0,1,2,3}  (optional)
+        returns   (B, 180, F)
         """
-        memory = self.encode(src)
+        memory = self.encode(src, scenario)
         tgt_h  = self.pos_enc(self.input_proj(tgt_in))
         T      = tgt_in.size(1)
         mask   = nn.Transformer.generate_square_subsequent_mask(
@@ -111,13 +119,15 @@ class TransformerSeq2Seq(nn.Module):
         return self.output_proj(out)                    # (B, 180, 277)
 
     @torch.no_grad()
-    def predict(self, src, dec_len=180):
+    def predict(self, src, dec_len=180, scenario: torch.Tensor | None = None):
         """
         Autoregressive inference — no teacher forcing.
-        src: (B, 300, F) → returns (B, dec_len, F)
+        src:      (B, 300, F)
+        scenario: (B,) optional scenario class
+        → returns (B, dec_len, F)
         """
         self.eval()
-        memory = self.encode(src)
+        memory = self.encode(src, scenario)
         pred   = src[:, -1:, :]   # start token = last encoder step
         outs   = []
         for _ in range(dec_len):
@@ -232,99 +242,40 @@ def make_predict_fn(model, batch_size=BATCH):
 
 # ── Val prediction plots ───────────────────────────────────────────────────────
 
-META_COLS_PLOT = {"timestamp", "attack", "label", "attack_p1", "attack_p2", "attack_p3"}
-TRAIN_FRAC_PLOT = 0.8
-
-def plot_val_predictions(model: "TransformerSeq2Seq", fitted_norm, device,
-                         enc_len: int = 300, dec_len: int = 180,
-                         model_name: str = "Transformer Seq2Seq"):
+def plot_val_predictions(model: "TransformerSeq2Seq", X_val: np.ndarray, Y_val: np.ndarray,
+                         sensor_cols: list, device,
+                         dec_len: int = 180, model_name: str = "Transformer Seq2Seq"):
     """
-    Generate two evaluation plots using only the val 20% of each train file.
-    No test data used.
-
-    Outputs:
-        outputs/plots/val_predictions_context.png    — full file + predicted val overlay
-        outputs/plots/val_predictions_comparison.png — IBM-style actual (red) vs predicted (blue)
+    Plot actual vs predicted for a sample of val windows.
+    X_val: (N, 300, F), Y_val: (N, 180, F)
     """
+    Path("outputs/plots").mkdir(parents=True, exist_ok=True)
     plt.style.use("fivethirtyeight")
-    const_hai, const_hiend, hiend_dups = identify_common_constants()
 
-    def _load_file(num):
-        df   = load_merged("train", num, drop_constants=True, keep_hai_duplicates=True,
-                           const_cols_hai=const_hai, const_cols_hiend=const_hiend,
-                           hiend_dup_cols=hiend_dups)
-        cols = [c for c in df.columns if c not in META_COLS_PLOT and df[c].dtype != object]
-        arr  = fitted_norm.transform(df)[cols].values.astype(np.float32)
-        return arr, cols
+    # Pick the sensor with highest variance in val
+    sidx = int(Y_val.var(axis=(0, 1)).argmax())
+    sensor_name = sensor_cols[sidx] if sidx < len(sensor_cols) else str(sidx)
 
-    @torch.no_grad()
-    def _predict_val(arr):
-        T         = len(arr)
-        val_start = int(T * TRAIN_FRAC_PLOT)
-        preds, pos = [], val_start
-        while pos + dec_len <= T:
-            enc_start = max(0, pos - enc_len)
-            enc = arr[enc_start:pos]
-            if len(enc) < enc_len:
-                pad = np.zeros((enc_len - len(enc), arr.shape[1]), dtype=np.float32)
-                enc = np.concatenate([pad, enc], axis=0)
-            src  = torch.tensor(enc[np.newaxis]).float().to(device)
-            pred = model.predict(src, dec_len=dec_len)
-            preds.append(pred[0].cpu().numpy())
-            pos += dec_len
-        return (np.concatenate(preds, axis=0) if preds else np.array([])), val_start
+    # Predict on first 200 val windows
+    n = min(200, len(X_val))
+    src  = torch.tensor(X_val[:n]).float().to(device)
+    pred = model.predict(src, dec_len=dec_len).cpu().numpy()   # (n, 180, F)
+    actual = Y_val[:n]                                          # (n, 180, F)
 
-    # Collect per-file results
-    results = {}
-    for num in range(1, 5):
-        print(f"  Plotting train{num} val ...")
-        arr, cols              = _load_file(num)
-        predictions, val_start = _predict_val(arr)
-        sidx                   = int(arr.var(axis=0).argmax())
-        results[num]           = (arr, cols, predictions, val_start, sidx)
+    # Flatten across windows for a time-series view
+    pred_flat   = pred[:, :, sidx].flatten()
+    actual_flat = actual[:, :, sidx].flatten()
+    rmse = np.sqrt(((pred_flat - actual_flat) ** 2).mean())
 
-    # ── Figure 1: full-file context ───────────────────────────────────────────
-    fig1, axes1 = plt.subplots(4, 1, figsize=(16, 20))
-    fig1.suptitle(f"{model_name} — val predictions in context\n"
-                  "(blue = actual full file · orange = predicted last 20%)", fontsize=13)
-    for i, num in enumerate(range(1, 5)):
-        arr, cols, preds, val_start, sidx = results[num]
-        ax = axes1[i]
-        ax.plot(arr[:, sidx], color="#1f77b4", lw=1, label="Actual (full file)")
-        if len(preds):
-            px   = np.arange(val_start, val_start + len(preds))
-            rmse = np.sqrt(((preds[:, sidx] - arr[val_start:val_start+len(preds), sidx])**2).mean())
-            ax.plot(px, preds[:, sidx], color="#ff7f0e", lw=1.2,
-                    label=f"Predicted val  RMSE={rmse:.4f}")
-        ax.axvline(val_start, color="grey", linestyle="--", lw=1)
-        ax.text(val_start + 20, ax.get_ylim()[1] * 0.92,
-                "← train 80%  |  val 20% →", fontsize=8, color="grey")
-        ax.set_title(f"train{num}  |  sensor: {cols[sidx][:35]}", fontsize=10)
-        ax.set_xlabel("timestep"); ax.set_ylabel("normalised value")
-        ax.legend(fontsize=9)
-    fig1.tight_layout()
-    fig1.savefig("outputs/plots/val_predictions_context.png", dpi=150, bbox_inches="tight")
-    print("  Saved: outputs/plots/val_predictions_context.png")
-
-    # ── Figure 2: IBM stock-price style — val only ────────────────────────────
-    fig2, axes2 = plt.subplots(4, 1, figsize=(14, 18))
-    fig2.suptitle(f"{model_name} — Real vs Predicted (val 20% only)", fontsize=13)
-    for i, num in enumerate(range(1, 5)):
-        arr, cols, preds, val_start, sidx = results[num]
-        ax = axes2[i]
-        if len(preds) == 0:
-            ax.set_title(f"train{num} — no predictions"); continue
-        n      = len(preds)
-        actual = arr[val_start:val_start + n, sidx]
-        rmse   = np.sqrt(((preds[:, sidx] - actual)**2).mean())
-        ax.plot(actual,         color="red",  lw=1.2, label=f"Real sensor value (train{num} val)")
-        ax.plot(preds[:, sidx], color="blue", lw=1.2, label=f"Predicted (train{num} val)")
-        ax.set_title(f"train{num}  |  sensor: {cols[sidx][:35]}  |  RMSE = {rmse:.4f}", fontsize=10)
-        ax.set_xlabel("Time (val timesteps)"); ax.set_ylabel("Normalised sensor value")
-        ax.legend(fontsize=9)
-    fig2.tight_layout()
-    fig2.savefig("outputs/plots/val_predictions_comparison.png", dpi=150, bbox_inches="tight")
-    print("  Saved: outputs/plots/val_predictions_comparison.png")
+    fig, ax = plt.subplots(figsize=(14, 5))
+    ax.plot(actual_flat, color="red",  lw=1,   label="Actual")
+    ax.plot(pred_flat,   color="blue", lw=1,   label=f"Predicted  RMSE={rmse:.4f}")
+    ax.set_title(f"{model_name} — Val predictions | sensor: {sensor_name[:40]}", fontsize=11)
+    ax.set_xlabel("timestep"); ax.set_ylabel("normalised value")
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    fig.savefig("outputs/plots/val_predictions_comparison.png", dpi=150, bbox_inches="tight")
     plt.close("all")
+    print("  Saved: outputs/plots/val_predictions_comparison.png")
 
 
