@@ -1,15 +1,5 @@
 """
 Transformer Seq2Seq — Layer 1: Physical Model / Digital Twin (primary)
-
-Predicts NORMAL sensor readings given 300s of context.
-Trained on benign data only (80% of each train1-4, temporal split).
-High reconstruction error on test2 = anomaly signal → passed to Layer 2.
-
-Data split (temporal 80/20 per file — see utils/prep.py twin()):
-    Train : first 80% of train1-4  → windowed per file (no gap crossing)
-    Val   : last  20% of train1-4  → same per-file windowing
-    Test  : test2 only (held-out — never seen during training)
-
 Shape: X (N, 300, F) → Y (N, 180, F)   where F = actual sensor count after
        constant column deletion (determined at runtime, ~112 features).
 

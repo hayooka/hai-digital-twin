@@ -18,9 +18,11 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "02_data_pipeline"))
 sys.path.insert(0, str(ROOT / "03_model"))
 
+
 from scaled_split  import load_and_prepare_episodic
 from transformer   import TransformerSeq2Seq
 from causal_loss   import CausalLoss
+
 
 # ── Config ────────────────────────────────────────────────────────────────────
 D_MODEL  = 256
@@ -31,7 +33,7 @@ DROPOUT  = 0.1
 EPOCHS   = 50
 BATCH    = 64
 LR       = 1e-4
-LAMBDA   = 0.1     # causal loss weight
+LAMBDA   = 0.5     # causal loss weight
 
 ENC_LEN  = 300
 DEC_LEN  = 180
@@ -134,7 +136,6 @@ for epoch in range(1, EPOCHS + 1):
 model.load_state_dict(best_state)
 print(f"  Best val loss: {best_val:.5f}")
 
-# ── 5. Evaluate ───────────────────────────────────────────────────────────────
 # ── 5. Save ───────────────────────────────────────────────────────────────────
 torch.save({
     "model_state": model.state_dict(),

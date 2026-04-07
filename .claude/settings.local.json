@@ -20,7 +20,9 @@
       "Bash(rmdir notebooks/)",
       "Bash(conda run -n base python -c ':*)",
       "Bash(python3 -c ':*)",
-      "Bash(\"/c/Users/ahmma/anaconda3/envs/digital_twin/python.exe\" 04_evaluate/run_eval.py)"
+      "Bash(\"/c/Users/ahmma/anaconda3/envs/digital_twin/python.exe\" 04_evaluate/run_eval.py)",
+      "Bash(\"/c/Users/ahmma/anaconda3/envs/digital_twin/python.exe\" 01_causal_graph/build_graph_full.py)",
+      "Bash(/c/Users/ahmma/anaconda3/envs/digital_twin/python.exe -c ':*)"
     ]
   }
 }

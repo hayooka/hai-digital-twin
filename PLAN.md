@@ -172,6 +172,16 @@ total_loss = mse_loss + λ * causal_loss
 
 #### 4A — Evaluation (EXISTS in `eval.py`)
 
+Yes, that's correct. You will generate this plot for each attack label (1,2,3) and also for normal (0).
+
+For each scenario:
+
+Past 1000s (true values) – solid black
+
+Future 200s (true values) – solid green
+
+Model prediction (first 180s of that future) – dashed red....
+
 Causal consistency → use the ~15 sensors from parents.json (they are a subset of physical sensors)
 
 Attack impact (normal vs attack) → use all P1_, P2_, P3_, P4_ columns (physical process variables)

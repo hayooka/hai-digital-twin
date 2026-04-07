@@ -35,10 +35,10 @@ DATA_DIR   = Path("data/processed")
 OUT_DIR    = Path("outputs/causal_graph")
 
 TRAIN_CSVS  = [DATA_DIR / f"train{i}.csv" for i in range(1, 5)]
-TDMI_SAMPLE = 50_000   # rows to sample for TDMI
+TDMI_SAMPLE = 200_000  # rows to sample for TDMI (more data → better MI)
 LAG_MAX     = 30       # max lag in seconds
 N_BINS      = 10       # histogram bins for MI estimation
-MIN_STD     = 1e-4     # below this → treat column as constant, skip TDMI
+MIN_STD     = 1e-6     # below this → treat column as constant, skip TDMI
 
 # ── Dynamics → lag search range ───────────────────────────────────────────────
 DYNAMICS_LAG_RANGE: dict[int, tuple[int, int]] = {
@@ -258,13 +258,14 @@ def build_physical_chains(
     # Build reverse sensor_map (HAI → short) for all entries (not just first)
     short_to_hai = sensor_map  # alias for clarity
 
-    # Collect unique L0 targets (actuators whose physical effects we want to trace)
-    l0_targets: set[str] = {e["target_hai"] for e in l0_edges}
+    # Expand to ALL actuators in SENSOR_MAP (not just L0 targets) so we don't
+    # miss physical edges like P1_PP02D → P1_FCV01D that have no DCS L0 entry.
+    all_actuators: set[str] = set(short_to_hai.values())
 
     new_edges: list[dict] = []
     seen: set[tuple[str, str]] = {(e["source_hai"], e["target_hai"]) for e in l0_edges}
 
-    for act_hai in l0_targets:
+    for act_hai in all_actuators:
         act_short = hai_to_short.get(act_hai)
         if not act_short or act_short not in phy_adj:
             continue
@@ -312,23 +313,17 @@ def build_physical_chains(
 # ── Section 4: TDMI lag estimation ───────────────────────────────────────────
 
 def _load_columns(
-    csv_paths  : list[Path],
-    cols       : set[str],
-    max_rows   : int,
-    rng_seed   : int = 42,
+    csv_paths : list[Path],
+    cols      : set[str],
+    max_rows  : int,
 ) -> dict[str, np.ndarray]:
     """
-    Stratified random sample across all training CSVs.
-
-    Each file contributes max_rows // n_files rows sampled at a random
-    offset within the file, so the sample spans the full temporal range
-    of training (not just the first N rows). This reduces constant_fallback
-    caused by stable setpoint periods at the start of each file.
+    Read only the needed columns, sampling evenly across all CSV files.
+    Each file contributes max_rows // len(csv_paths) rows so that all
+    train files are represented (prevents train1-only bias).
+    Returns {col: np.ndarray} for all requested cols that exist.
     """
-    rng = np.random.default_rng(rng_seed)
-    n_files = len([p for p in csv_paths if p.exists()])
-    rows_per_file = max(1, max_rows // max(n_files, 1))
-
+    per_file = max(1, max_rows // len(csv_paths))
     data: dict[str, list[float]] = {c: [] for c in cols}
     missing: set[str] = set()
 
@@ -336,25 +331,11 @@ def _load_columns(
         if not path.exists():
             print(f"  WARNING: {path} not found, skipping")
             continue
-
-        # Count file rows efficiently
-        with open(path, encoding="utf-8") as f:
-            n_total = sum(1 for _ in f) - 1  # subtract header
-
-        if n_total <= 0:
-            continue
-
-        # Random contiguous window — preserves time-series autocorrelation
-        # while sampling from a different part of each file
-        start = int(rng.integers(0, max(1, n_total - rows_per_file)))
-        end   = start + rows_per_file
-
+        rows_this_file = 0
         with open(path, newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
-            for i, row in enumerate(reader):
-                if i < start:
-                    continue
-                if i >= end:
+            for row in reader:
+                if rows_this_file >= per_file:
                     break
                 for c in cols:
                     if c in missing:
@@ -367,6 +348,8 @@ def _load_columns(
                         data[c].append(float(v))
                     except ValueError:
                         data[c].append(float("nan"))
+                rows_this_file += 1
+        print(f"    {path.name}: {rows_this_file:,} rows read")
 
     if missing:
         print(f"  WARNING: columns not found in CSVs: {sorted(missing)}")
@@ -411,6 +394,30 @@ def _tdmi(x: np.ndarray, y: np.ndarray, lag: int, n_bins: int = 10) -> float:
     return max(mi, 0.0)
 
 
+def _xcorr_lag(x: np.ndarray, y: np.ndarray, lo: int, hi: int) -> int:
+    """
+    Cross-correlation on differenced signals. Returns best lag in [lo, hi].
+    More robust than MI for noisy/quantized industrial signals.
+    """
+    dx = np.diff(x.astype(np.float64))
+    dy = np.diff(y.astype(np.float64))
+    # Remove NaNs
+    mask = ~(np.isnan(dx) | np.isnan(dy))
+    dx, dy = dx[mask], dy[mask]
+    if len(dx) < hi + 10:
+        return (lo + hi) // 2
+
+    best_lag, best_corr = lo, -np.inf
+    for lag in range(lo, hi + 1):
+        if lag >= len(dx):
+            break
+        corr = float(np.corrcoef(dx[:-lag], dy[lag:])[0, 1]) if lag > 0 else float(np.corrcoef(dx, dy)[0, 1])
+        if abs(corr) > abs(best_corr):
+            best_corr = corr
+            best_lag  = lag
+    return best_lag
+
+
 def _best_lag(
     x       : np.ndarray,
     y       : np.ndarray,
@@ -425,14 +432,19 @@ def _best_lag(
     if np.nanstd(x) < min_std or np.nanstd(y) < min_std:
         return midpoint, "constant_fallback"
 
-    lags   = list(range(lo, hi + 1))
-    mi_vals = [_tdmi(x, y, lag, n_bins) for lag in lags]
+    # Try TDMI on differenced signals first (better for noisy/trending data)
+    dx = np.diff(x)
+    dy = np.diff(y)
+    lags    = list(range(lo, hi + 1))
+    mi_vals = [_tdmi(dx, dy, lag, n_bins) for lag in lags]
     best_mi = max(mi_vals)
 
-    if best_mi < 1e-5:
-        return midpoint, "low_mi_fallback"
+    if best_mi >= 1e-5:
+        return lags[int(np.argmax(mi_vals))], "tdmi"
 
-    return lags[int(np.argmax(mi_vals))], "tdmi"
+    # Fallback: cross-correlation on differenced signals
+    xcorr_lag = _xcorr_lag(x, y, lo, hi)
+    return xcorr_lag, "xcorr_fallback"
 
 
 def compute_tdmi_lags(
@@ -483,7 +495,7 @@ def compute_tdmi_lags(
             n_lowmi += 1
 
     print(f"  Lag methods: tdmi={n_tdmi}, constant_fallback={n_const}, "
-          f"low_mi_fallback={n_lowmi}")
+          f"other_fallback={n_lowmi}")
     return all_edges
 
 
