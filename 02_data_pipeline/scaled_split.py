@@ -31,7 +31,7 @@ from sklearn.model_selection import train_test_split
 from typing import List, Dict, Tuple, Optional
 
 PROCESSED_DIR      = "data/processed"
-OUTPUT_DIR         = "outputs"
+OUTPUT_DIR         = "outputs/scaled_split"
 TRAIN_RATIO        = 0.80          # For temporal split within train1-3
 ATTACK_SPLIT_RATIO = 0.80          # 80% attacks to train, 20% to test
 BEFORE_ATTACK_SEC  = 300

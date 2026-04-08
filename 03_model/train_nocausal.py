@@ -37,8 +37,8 @@ ENC_LEN  = 300
 DEC_LEN  = 180
 STRIDE   = 60
 
-Path("outputs/models").mkdir(parents=True, exist_ok=True)
-Path("outputs/plots").mkdir(parents=True,  exist_ok=True)
+Path("outputs/transformer/no_causal/models").mkdir(parents=True, exist_ok=True)
+Path("outputs/transformer/no_causal/plots").mkdir(parents=True,  exist_ok=True)
 
 # ── 1. Load & window data ─────────────────────────────────────────────────────
 print("=" * 60)
@@ -140,6 +140,6 @@ torch.save({
     "n_feat":      N_FEAT,
     "n_scenarios": N_SCENARIOS,
     "sensor_cols": sensor_cols,
-}, "outputs/models/transformer.pt")
-print("\nSaved: outputs/models/transformer.pt")
+}, "outputs/transformer/no_causal/models/transformer.pt")
+print("\nSaved: outputs/transformer/no_causal/models/transformer.pt")
 print("Run `python 04_evaluate/run_eval.py` to evaluate and plot.")

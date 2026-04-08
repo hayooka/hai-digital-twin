@@ -25,7 +25,7 @@ from transformer import TransformerSeq2Seq, plot_val_predictions
 from eval        import evaluate_twin
 
 BATCH       = 64
-CHECKPOINT  = ROOT / "outputs/transformer/causal/models/transformer.pt" 
+CHECKPOINT  = ROOT / "outputs/transformer/no_causal/models/transformer.pt" #CHECKPOINT = ROOT / "outputs/transformer/no_causal/models/transformer.pt"
 VAL_DATA    = ROOT / "outputs/scaled_split/val_data.npz"
 TEST_DATA   = ROOT / "outputs/scaled_split/test_data.npz"
 
@@ -80,13 +80,13 @@ metrics = evaluate_twin(
     X_val=X_val, Y_val=Y_val,
     X_test=X_test, Y_test=Y_test,
     y_test=y_test,
-    save_path=str(ROOT / "outputs/transformer/causal/transformer_metrics.json"),
+    save_path=str(ROOT / "outputs/transformer/no_causal/transformer_metrics.json"),
 )
 
-# ── Causal violation % ────────────────────────────────────────────────────────
+# ── Causal violation % (relative error) ───────────────────────────────────────
 print("\nChecking causal violations...")
 
-CAUSAL_THRESHOLD = 0.1   # absolute threshold (normalized space)
+REL_THRESHOLD = 0.10   # 10% relative error
 
 parents_data = json.loads((ROOT / "outputs/causal_graph/parents_full.json").read_text())
 col_idx = {col: i for i, col in enumerate(sensor_cols)}
@@ -123,9 +123,9 @@ for sensor_name, t_idx, parents in relationships:
         parent_signals.append(Y_pred_val[:, offset:T - lag, p_idx])
     expected = np.stack(parent_signals, axis=0).mean(axis=0)   # (N, T-max_lag)
 
-    diff = np.abs(target_vals - expected)
-    violations = (diff > CAUSAL_THRESHOLD).sum()
-    checks = diff.size
+    rel_diff = np.abs(target_vals - expected) / (np.abs(expected) + 1e-6)
+    violations = (rel_diff > REL_THRESHOLD).sum()
+    checks = rel_diff.size
     pct = 100.0 * violations / checks
 
     total_checks += checks
@@ -135,7 +135,7 @@ for sensor_name, t_idx, parents in relationships:
 overall_pct = 100.0 * total_violations / total_checks if total_checks > 0 else float("nan")
 
 print(f"\n{'='*55}")
-print(f"  CAUSAL VIOLATION REPORT  (threshold={CAUSAL_THRESHOLD})")
+print(f"  CAUSAL VIOLATION REPORT  (relative threshold = {REL_THRESHOLD*100:.0f}%)")
 print(f"{'='*55}")
 for name, pct in sorted(per_edge, key=lambda x: -x[1]):
     flag = "  *** FAIL" if pct >= 20 else ""
@@ -145,9 +145,9 @@ print(f"  Overall causal violation: {overall_pct:.2f}%  {'PASS (<20%)' if overal
 print(f"{'='*55}")
 
 metrics["causal_violation_pct"] = round(overall_pct, 4)
-with open(ROOT / "outputs/transformer/causal/transformer_metrics.json", "w") as f: #    save_path=str(ROOT / "outputs/transformer/causal/transformer_metrics.json"),
+with open(ROOT / "outputs/transformer/no_causal/transformer_metrics.json", "w") as f: #    save_path=str(ROOT / "outputs/transformer/causal/transformer_metrics.json"),
     json.dump(metrics, f, indent=2)
-print(f"  Updated outputs/transformer/causal/transformer_metrics.json")
+print(f"  Updated outputs/transformer/no_causal/transformer_metrics.json")
 
 # ── Causal violation plot ─────────────────────────────────────────────────────
 import matplotlib
@@ -171,12 +171,12 @@ for bar, val in zip(bars, values):
             f"{val:.1f}%", va="center", fontsize=8)
 
 ax.set_xlabel("Causal Violation %", fontsize=11)
-ax.set_title(f"Causal Violation per Sensor  (threshold={CAUSAL_THRESHOLD})", fontsize=12)
+ax.set_title(f"Causal Violation per Sensor  (relative threshold = {REL_THRESHOLD*100:.0f}%)", fontsize=12)
 ax.set_xlim(0, max(values) * 1.12)
 ax.legend(fontsize=9)
 fig.tight_layout()
 
-plot_path = ROOT / "outputs/transformer/causal/plots/causal_violations.png"
+plot_path = ROOT / "outputs/transformer/no_causal/plots/causal_violations.png"
 fig.savefig(plot_path, dpi=150, bbox_inches="tight")
 plt.close("all")
 print(f"  Saved: {plot_path}")
@@ -308,13 +308,13 @@ for scenario_id, scenario_name in SCENARIO_LABELS.items():
         ax.legend(fontsize=7)
 
     fig.tight_layout()
-    out_path = ROOT / f"outputs/transformer/causal/plots/scenario_{scenario_id}_predictions.png"
+    out_path = ROOT / f"outputs/transformer/no_causal/plots/scenario_{scenario_id}_predictions.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close("all")
     print(f"  Saved: {out_path}")
 
 # ── Val predictions overview ──────────────────────────────────────────────────
 print("\nPlotting val predictions...")
-Path(ROOT / "outputs/transformer/causal/plots").mkdir(parents=True, exist_ok=True)
+Path(ROOT / "outputs/transformer/no_causal/plots").mkdir(parents=True, exist_ok=True)
 plot_val_predictions(model, X_val, Y_val, sensor_cols, device,
                      dec_len=180, model_name="HAI Digital Twin Transformer")
