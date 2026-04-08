@@ -33,14 +33,14 @@ DROPOUT  = 0.1
 EPOCHS   = 50
 BATCH    = 64
 LR       = 1e-4
-LAMBDA   = 0.5     # causal loss weight
+LAMBDA   = 0.5   # causal loss weight
 
 ENC_LEN  = 300
 DEC_LEN  = 180
 STRIDE   = 60
 
-Path("outputs/models").mkdir(parents=True, exist_ok=True)
-Path("outputs/plots").mkdir(parents=True,  exist_ok=True)
+Path("outputs/transformer/causal/models").mkdir(parents=True, exist_ok=True)
+Path("outputs/transformer/causal/plots").mkdir(parents=True,  exist_ok=True)
 
 # ── 1. Load & window data ─────────────────────────────────────────────────────
 print("=" * 60)
@@ -142,6 +142,7 @@ torch.save({
     "n_feat":      N_FEAT,
     "n_scenarios": N_SCENARIOS,
     "sensor_cols": sensor_cols,
-}, "outputs/models/transformer.pt")
-print("\nSaved: outputs/models/transformer.pt")
+}, "outputs/transformer/causal/models/transformer.pt")
+print("\nSaved: outputs/transformer/causal/models/transformer.pt")
 print("Run `python 04_evaluate/run_eval.py` to evaluate and plot.")
+
