@@ -235,7 +235,8 @@ def make_predict_fn(model, batch_size=BATCH):
 
 def plot_val_predictions(model: "TransformerSeq2Seq", X_val: np.ndarray, Y_val: np.ndarray,
                          sensor_cols: list, device,
-                         dec_len: int = 180, model_name: str = "Transformer Seq2Seq"):
+                         dec_len: int = 180, model_name: str = "Transformer Seq2Seq",
+                         out_path: str = "outputs/plots/val_predictions_comparison.png"):
     """
     Plot actual vs predicted for a sample of val windows.
     X_val: (N, 300, F), Y_val: (N, 180, F)
@@ -265,8 +266,9 @@ def plot_val_predictions(model: "TransformerSeq2Seq", X_val: np.ndarray, Y_val: 
     ax.set_xlabel("timestep"); ax.set_ylabel("normalised value")
     ax.legend(fontsize=9)
     fig.tight_layout()
-    fig.savefig("outputs/plots/val_predictions_comparison.png", dpi=150, bbox_inches="tight")
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close("all")
-    print("  Saved: outputs/plots/val_predictions_comparison.png")
+    print(f"  Saved: {out_path}")
 
 

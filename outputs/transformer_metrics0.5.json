@@ -1,7 +1,0 @@
-{
-  "rmse_val": 0.18468347191810608,
-  "rmse_test_normal": 0.19497641921043396,
-  "rmse_test_attack": 0.6831125020980835,
-  "separation_ratio": 3.503564712411784,
-  "causal_violation_pct": 68.9715
-}
