@@ -1,0 +1,180 @@
+"""
+lstm.py — LSTM Seq2Seq with scenario conditioning (causal loss compatible).
+
+Matches Transformer capabilities:
+    - Scenario embedding (4 classes: normal, AP_no, AP_comb, AE_no)
+    - Teacher forcing via [last encoder step, target[:, :-1, :]]
+    - Autoregressive inference with scenario conditioning
+    - Compatible with CausalLoss from causal_loss.py
+
+Architecture:
+    Encoder: 4‑layer BiLSTM (256 per direction) → bridge to 256
+    Decoder: 4‑layer LSTM (256), input = concat(prev_output, scenario_emb)
+    Output:  Linear(256 → n_features)
+"""
+
+import torch
+import torch.nn as nn
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from pathlib import Path
+
+
+class _Encoder(nn.Module):
+    def __init__(self, n_features, hidden_size, num_layers, dropout):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_layers  = num_layers
+        self.lstm = nn.LSTM(
+            input_size    = n_features,
+            hidden_size   = hidden_size,
+            num_layers    = num_layers,
+            batch_first   = True,
+            dropout       = dropout if num_layers > 1 else 0.0,
+            bidirectional = True,
+        )
+        self.h_bridge = nn.Linear(hidden_size * 2, hidden_size)
+        self.c_bridge = nn.Linear(hidden_size * 2, hidden_size)
+
+    def forward(self, x):
+        _, (h, c) = self.lstm(x)
+        h = h.view(self.num_layers, 2, x.size(0), self.hidden_size)
+        h = torch.cat([h[:, 0], h[:, 1]], dim=-1)
+        h = torch.tanh(self.h_bridge(h))
+        c = c.view(self.num_layers, 2, x.size(0), self.hidden_size)
+        c = torch.cat([c[:, 0], c[:, 1]], dim=-1)
+        c = torch.tanh(self.c_bridge(c))
+        return h, c
+
+
+class _Decoder(nn.Module):
+    def __init__(self, n_features, hidden_size, num_layers, dropout,
+                 scenario_emb_dim):
+        super().__init__()
+        self.lstm = nn.LSTM(
+            input_size  = n_features + scenario_emb_dim,
+            hidden_size = hidden_size,
+            num_layers  = num_layers,
+            batch_first = True,
+            dropout     = dropout if num_layers > 1 else 0.0,
+        )
+        self.dropout  = nn.Dropout(dropout)
+        self.out_proj = nn.Linear(hidden_size, n_features)
+
+    def step(self, x, scenario_vec, h, c):
+        sc_exp = scenario_vec.unsqueeze(1)
+        lstm_input = torch.cat([x, sc_exp], dim=-1)
+        out, (h, c) = self.lstm(lstm_input, (h, c))
+        pred = self.out_proj(self.dropout(out))
+        return pred, h, c
+
+
+class LSTMSeq2Seq(nn.Module):
+    """
+    LSTM Seq2Seq with scenario conditioning.
+    """
+    def __init__(
+        self,
+        n_features:           int,
+        n_scenarios:          int = 4,
+        hidden_size:          int = 256,
+        num_layers:           int = 4,
+        dropout:              float = 0.1,
+        output_len:           int = 180,
+    ):
+        super().__init__()
+        self.n_features = n_features
+        self.n_scenarios = n_scenarios
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.output_len = output_len
+
+        self.scenario_emb = nn.Embedding(n_scenarios, hidden_size)
+        self.encoder = _Encoder(n_features, hidden_size, num_layers, dropout)
+        self.decoder = _Decoder(n_features, hidden_size, num_layers, dropout,
+                                scenario_emb_dim=hidden_size)
+
+    def forward(self, src, tgt_in, scenario):
+        """
+        Teacher‑forced forward pass.
+        src: (B, 300, F)
+        tgt_in: (B, 180, F)  # already includes start token + target[:-1]
+        scenario: (B,) int
+        """
+        h, c = self.encoder(src)
+        sc_emb = self.scenario_emb(scenario)
+        outputs = []
+        for t in range(self.output_len):
+            x_t = tgt_in[:, t:t+1, :]
+            pred, h, c = self.decoder.step(x_t, sc_emb, h, c)
+            outputs.append(pred)
+        return torch.cat(outputs, dim=1)
+
+    @torch.no_grad()
+    def predict(self, src, dec_len=180, scenario=None):
+        self.eval()
+        if scenario is None:
+            scenario = torch.zeros(src.size(0), dtype=torch.long, device=src.device)
+        h, c = self.encoder(src)
+        sc_emb = self.scenario_emb(scenario)
+        dec_input = src[:, -1:, :]
+        outputs = []
+        for _ in range(dec_len):
+            pred, h, c = self.decoder.step(dec_input, sc_emb, h, c)
+            outputs.append(pred)
+            dec_input = pred
+        return torch.cat(outputs, dim=1)
+
+    def count_parameters(self):
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
+# ── Helper functions (mirroring transformer.py) ───────────────────────────────
+
+def make_predict_fn(model, batch_size=64):
+    device = next(model.parameters()).device
+    model.eval()
+    def predict_fn(X: np.ndarray, Y: np.ndarray, scenario: np.ndarray | None = None) -> np.ndarray:
+        preds = []
+        with torch.no_grad():
+            for i in range(0, len(X), batch_size):
+                src = torch.tensor(X[i:i+batch_size]).float().to(device)
+                tgt = torch.tensor(Y[i:i+batch_size]).float().to(device)
+                if scenario is not None:
+                    sc = torch.tensor(scenario[i:i+batch_size]).long().to(device)
+                else:
+                    sc = torch.zeros(len(src), dtype=torch.long, device=device)
+                dec_in = torch.cat([src[:, -1:, :], tgt[:, :-1, :]], dim=1)
+                pred = model(src, dec_in, sc)
+                preds.append(pred.cpu().numpy())
+        return np.concatenate(preds, axis=0)
+    return predict_fn
+
+
+def plot_val_predictions(model, X_val, Y_val, sensor_cols, device,
+                         dec_len=180, model_name="LSTM Seq2Seq",
+                         out_path="outputs/plots/val_predictions_comparison.png"):
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    plt.style.use("fivethirtyeight")
+    sidx = int(Y_val.var(axis=(0, 1)).argmax())
+    sensor_name = sensor_cols[sidx] if sidx < len(sensor_cols) else str(sidx)
+    n = min(200, len(X_val))
+    src = torch.tensor(X_val[:n]).float().to(device)
+    pred = model.predict(src, dec_len=dec_len, scenario=torch.zeros(n, dtype=torch.long, device=device)).cpu().numpy()
+    actual = Y_val[:n]
+    pred_flat = pred[:, :, sidx].flatten()
+    actual_flat = actual[:, :, sidx].flatten()
+    rmse = np.sqrt(((pred_flat - actual_flat) ** 2).mean())
+    fig, ax = plt.subplots(figsize=(14, 5))
+    ax.plot(actual_flat, color="red", lw=1, label="Actual")
+    ax.plot(pred_flat, color="blue", lw=1, label=f"Predicted  RMSE={rmse:.4f}")
+    ax.set_title(f"{model_name} — Val predictions | sensor: {sensor_name[:40]}")
+    ax.set_xlabel("timestep")
+    ax.set_ylabel("normalised value")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close("all")
+    print(f"  Saved: {out_path}")

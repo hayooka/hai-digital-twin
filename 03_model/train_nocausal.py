@@ -116,10 +116,11 @@ for epoch in range(1, EPOCHS + 1):
     val_loss, n_b = 0.0, 0
     with torch.no_grad():
         for i in range(0, len(X_val), BATCH):
-            src    = torch.tensor(X_val[i:i+BATCH]).float().to(device)
-            tgt    = torch.tensor(Y_val[i:i+BATCH]).float().to(device)
-            dec_in = torch.cat([src[:, -1:, :], tgt[:, :-1, :]], dim=1)
-            val_loss += criterion(model(src, dec_in), tgt).item()
+            src      = torch.tensor(X_val[i:i+BATCH]).float().to(device)
+            tgt      = torch.tensor(Y_val[i:i+BATCH]).float().to(device)
+            scenario = torch.zeros(len(src), dtype=torch.long, device=device)
+            dec_in   = torch.cat([src[:, -1:, :], tgt[:, :-1, :]], dim=1)
+            val_loss += criterion(model(src, dec_in, scenario), tgt).item()
             n_b += 1
     val_loss /= max(1, n_b)
     scheduler.step(val_loss)
