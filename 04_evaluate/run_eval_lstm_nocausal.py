@@ -1,13 +1,13 @@
 """
-run_eval.py — Evaluate a saved Transformer checkpoint without retraining.
+run_eval_lstm_nocausal.py — Evaluate a saved LSTM checkpoint without retraining.
 
 Loads:
-    outputs/models/transformer.pt   — saved model weights + metadata
-    outputs/val_data.npz            — val windows
-    outputs/test_data.npz           — test windows
+    outputs/lstm/no_causal/models/lstm.pt  — saved model weights + metadata
+    outputs/scaled_split/val_data.npz      — val windows
+    outputs/scaled_split/test_data.npz     — test windows
 
 Run:
-    python 04_evaluate/run_eval.py
+    python 04_evaluate/run_eval_lstm_nocausal.py
 """
 
 import sys
@@ -21,11 +21,11 @@ EVAL_DIR = Path(__file__).parent
 sys.path.insert(0, str(ROOT / "03_model"))
 sys.path.insert(0, str(EVAL_DIR))
 
-from transformer import TransformerSeq2Seq, plot_val_predictions
-from eval        import evaluate_twin
+from lstm import LSTMSeq2Seq, plot_val_predictions
+from eval import evaluate_twin
 
 BATCH       = 64
-CHECKPOINT  = ROOT / "outputs/transformer/no_causal/models/transformer.pt" #CHECKPOINT = ROOT / "outputs/transformer/no_causal/models/transformer.pt"
+CHECKPOINT  = ROOT / "outputs/lstm/no_causal/models/lstm.pt"
 VAL_DATA    = ROOT / "outputs/scaled_split/val_data.npz"
 TEST_DATA   = ROOT / "outputs/scaled_split/test_data.npz"
 
@@ -40,10 +40,9 @@ sensor_cols = ckpt["sensor_cols"]
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"  Device: {device}  |  features: {n_feat}  |  scenarios: {n_scenarios}")
 
-model = TransformerSeq2Seq(
-    n_features=n_feat, d_model=256, n_heads=8,
-    n_layers=4, ffn_dim=1024, dropout=0.1,
-    n_scenarios=n_scenarios,
+model = LSTMSeq2Seq(
+    n_features=n_feat, n_scenarios=n_scenarios,
+    hidden_size=256, num_layers=4, dropout=0.1, output_len=180,
 ).to(device)
 model.load_state_dict(ckpt["model_state"])
 model.eval()
@@ -80,7 +79,7 @@ metrics = evaluate_twin(
     X_val=X_val, Y_val=Y_val,
     X_test=X_test, Y_test=Y_test,
     y_test=y_test,
-    save_path=str(ROOT / "outputs/transformer/no_causal/transformer_metrics.json"),
+    save_path=str(ROOT / "outputs/lstm/no_causal/lstm_metrics.json"),
 )
 
 # ── Causal violation % (relative error) ───────────────────────────────────────
@@ -145,9 +144,9 @@ print(f"  Overall causal violation: {overall_pct:.2f}%  {'PASS (<20%)' if overal
 print(f"{'='*55}")
 
 metrics["causal_violation_pct"] = round(overall_pct, 4)
-with open(ROOT / "outputs/transformer/no_causal/transformer_metrics.json", "w") as f: #    save_path=str(ROOT / "outputs/transformer/causal/transformer_metrics.json"),
+with open(ROOT / "outputs/lstm/no_causal/lstm_metrics.json", "w") as f:
     json.dump(metrics, f, indent=2)
-print(f"  Updated outputs/transformer/no_causal/transformer_metrics.json")
+print(f"  Updated outputs/lstm/no_causal/lstm_metrics.json")
 
 # ── Causal violation plot ─────────────────────────────────────────────────────
 import matplotlib
@@ -176,7 +175,8 @@ ax.set_xlim(0, max(values) * 1.12)
 ax.legend(fontsize=9)
 fig.tight_layout()
 
-plot_path = ROOT / "outputs/transformer/no_causal/plots/causal_violations.png"
+plot_path = ROOT / "outputs/lstm/no_causal/plots/causal_violations.png"
+Path(plot_path).parent.mkdir(parents=True, exist_ok=True)
 fig.savefig(plot_path, dpi=150, bbox_inches="tight")
 plt.close("all")
 print(f"  Saved: {plot_path}")
@@ -194,8 +194,6 @@ SCENARIO_LABELS = {
     3: "AE (no combination)",
 }
 
-# 4 sensor sets, one per scenario — different sensor types per scenario
-# picks by keyword priority; falls back gracefully if a name isn't in sensor_cols
 def _pick(cols, keywords, n=1):
     """Return up to n sensor indices matching any keyword, in order."""
     result = []
@@ -308,13 +306,14 @@ for scenario_id, scenario_name in SCENARIO_LABELS.items():
         ax.legend(fontsize=7)
 
     fig.tight_layout()
-    out_path = ROOT / f"outputs/transformer/no_causal/plots/scenario_{scenario_id}_predictions.png"
+    out_path = ROOT / f"outputs/lstm/no_causal/plots/scenario_{scenario_id}_predictions.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close("all")
     print(f"  Saved: {out_path}")
 
 # ── Val predictions overview ──────────────────────────────────────────────────
 print("\nPlotting val predictions...")
-Path(ROOT / "outputs/transformer/no_causal/plots").mkdir(parents=True, exist_ok=True)
+Path(ROOT / "outputs/lstm/no_causal/plots").mkdir(parents=True, exist_ok=True)
 plot_val_predictions(model, X_val, Y_val, sensor_cols, device,
-                     dec_len=180, model_name="HAI Digital Twin Transformer")
+                     dec_len=180, model_name="HAI Digital Twin LSTM",
+                     out_path=str(ROOT / "outputs/lstm/no_causal/plots/val_predictions_comparison.png"))

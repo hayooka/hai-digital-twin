@@ -1,13 +1,13 @@
 """
-run_eval.py — Evaluate a saved Transformer checkpoint without retraining.
+run_eval_lstm_causal.py — Evaluate a saved LSTM checkpoint (with causal loss).
 
 Loads:
-    outputs/models/transformer.pt   — saved model weights + metadata
-    outputs/val_data.npz            — val windows
-    outputs/test_data.npz           — test windows
+    outputs/lstm/causal/models/lstm.pt   — saved model weights + metadata
+    outputs/scaled_split/val_data.npz    — val windows
+    outputs/scaled_split/test_data.npz   — test windows
 
 Run:
-    python 04_evaluate/run_eval.py
+    python 04_evaluate/run_eval_lstm_causal.py
 """
 
 import sys
@@ -21,11 +21,11 @@ EVAL_DIR = Path(__file__).parent
 sys.path.insert(0, str(ROOT / "03_model"))
 sys.path.insert(0, str(EVAL_DIR))
 
-from transformer import TransformerSeq2Seq, plot_val_predictions
-from eval        import evaluate_twin
+from lstm import LSTMSeq2Seq, plot_val_predictions
+from eval import evaluate_twin
 
 BATCH       = 64
-CHECKPOINT  = ROOT / "outputs/transformer/no_causal/models/transformer.pt" #CHECKPOINT = ROOT / "outputs/transformer/no_causal/models/transformer.pt"
+CHECKPOINT  = ROOT / "outputs/lstm/causal/models/lstm.pt"
 VAL_DATA    = ROOT / "outputs/scaled_split/val_data.npz"
 TEST_DATA   = ROOT / "outputs/scaled_split/test_data.npz"
 
@@ -40,10 +40,9 @@ sensor_cols = ckpt["sensor_cols"]
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"  Device: {device}  |  features: {n_feat}  |  scenarios: {n_scenarios}")
 
-model = TransformerSeq2Seq(
-    n_features=n_feat, d_model=256, n_heads=8,
-    n_layers=4, ffn_dim=1024, dropout=0.1,
-    n_scenarios=n_scenarios,
+model = LSTMSeq2Seq(
+    n_features=n_feat, n_scenarios=n_scenarios,
+    hidden_size=256, num_layers=4, dropout=0.1, output_len=180,
 ).to(device)
 model.load_state_dict(ckpt["model_state"])
 model.eval()
@@ -80,13 +79,13 @@ metrics = evaluate_twin(
     X_val=X_val, Y_val=Y_val,
     X_test=X_test, Y_test=Y_test,
     y_test=y_test,
-    save_path=str(ROOT / "outputs/transformer/no_causal/transformer_metrics.json"),
+    save_path=str(ROOT / "outputs/lstm/causal/lstm_metrics.json"),
 )
 
-# ── Causal violation % (relative error) ───────────────────────────────────────
+# ── Causal violation % (absolute threshold, same as Transformer) ──────────────
 print("\nChecking causal violations...")
 
-CAUSAL_THRESHOLD = 0.1   # absolute threshold (normalized space) — same across all 4 evals
+CAUSAL_THRESHOLD = 0.1   # absolute threshold (normalized space)
 
 parents_data = json.loads((ROOT / "outputs/causal_graph/parents_full.json").read_text())
 col_idx = {col: i for i, col in enumerate(sensor_cols)}
@@ -103,25 +102,24 @@ for target, plist in parents_data.items():
 
 # Run predictions on val set (normal behavior — strictest test)
 Y_pred_val = predict_fn(X_val, Y_val, np.zeros(len(X_val), dtype=np.int32))
-# Y_pred_val: (N, T, F)
 
 total_checks = 0
 total_violations = 0
-
 per_edge = []
+
 for sensor_name, t_idx, parents in relationships:
     max_lag = max(lag for _, lag in parents)
     T = Y_pred_val.shape[1]
     if max_lag >= T:
         continue
 
-    target_vals = Y_pred_val[:, max_lag:, t_idx]   # (N, T-max_lag)
+    target_vals = Y_pred_val[:, max_lag:, t_idx]
 
     parent_signals = []
     for p_idx, lag in parents:
         offset = max_lag - lag
         parent_signals.append(Y_pred_val[:, offset:T - lag, p_idx])
-    expected = np.stack(parent_signals, axis=0).mean(axis=0)   # (N, T-max_lag)
+    expected = np.stack(parent_signals, axis=0).mean(axis=0)
 
     diff = np.abs(target_vals - expected)
     violations = (diff > CAUSAL_THRESHOLD).sum()
@@ -145,9 +143,9 @@ print(f"  Overall causal violation: {overall_pct:.2f}%  {'PASS (<20%)' if overal
 print(f"{'='*55}")
 
 metrics["causal_violation_pct"] = round(overall_pct, 4)
-with open(ROOT / "outputs/transformer/no_causal/transformer_metrics.json", "w") as f: #    save_path=str(ROOT / "outputs/transformer/causal/transformer_metrics.json"),
+with open(ROOT / "outputs/lstm/causal/lstm_metrics.json", "w") as f:
     json.dump(metrics, f, indent=2)
-print(f"  Updated outputs/transformer/no_causal/transformer_metrics.json")
+print(f"  Updated outputs/lstm/causal/lstm_metrics.json")
 
 # ── Causal violation plot ─────────────────────────────────────────────────────
 import matplotlib
@@ -165,7 +163,6 @@ ax.axvline(20, color="black", linestyle="--", linewidth=1.2, label="20% threshol
 ax.axvline(overall_pct, color="#ff7f0e", linestyle="-", linewidth=1.5,
            label=f"Overall: {overall_pct:.1f}%")
 
-# value labels
 for bar, val in zip(bars, values):
     ax.text(val + 0.5, bar.get_y() + bar.get_height() / 2,
             f"{val:.1f}%", va="center", fontsize=8)
@@ -176,7 +173,8 @@ ax.set_xlim(0, max(values) * 1.12)
 ax.legend(fontsize=9)
 fig.tight_layout()
 
-plot_path = ROOT / "outputs/transformer/no_causal/plots/causal_violations.png"
+plot_path = ROOT / "outputs/lstm/causal/plots/causal_violations.png"
+Path(plot_path).parent.mkdir(parents=True, exist_ok=True)
 fig.savefig(plot_path, dpi=150, bbox_inches="tight")
 plt.close("all")
 print(f"  Saved: {plot_path}")
@@ -184,8 +182,8 @@ print(f"  Saved: {plot_path}")
 # ── Scenario prediction plots ─────────────────────────────────────────────────
 print("\nPlotting scenario prediction plots...")
 
-STRIDE   = 60     # must match training stride
-PAST_LEN = 1000   # timesteps of past to display
+STRIDE   = 60
+PAST_LEN = 1000
 
 SCENARIO_LABELS = {
     0: "Normal",
@@ -194,10 +192,7 @@ SCENARIO_LABELS = {
     3: "AE (no combination)",
 }
 
-# 4 sensor sets, one per scenario — different sensor types per scenario
-# picks by keyword priority; falls back gracefully if a name isn't in sensor_cols
 def _pick(cols, keywords, n=1):
-    """Return up to n sensor indices matching any keyword, in order."""
     result = []
     for kw in keywords:
         for i, c in enumerate(cols):
@@ -208,22 +203,18 @@ def _pick(cols, keywords, n=1):
     return result
 
 SCENARIO_SENSORS = {
-    # pressure · flow · valve · temperature
     0: [_pick(sensor_cols, ["P1_PIT01"], 1),
         _pick(sensor_cols, ["P1_FT01"], 1),
         _pick(sensor_cols, ["P1_FCV01D"], 1),
         _pick(sensor_cols, ["P1_TIT01"], 1)],
-    # pressure · level · level-ctrl · pump
     1: [_pick(sensor_cols, ["P1_PIT02"], 1),
         _pick(sensor_cols, ["P1_LIT01"], 1),
         _pick(sensor_cols, ["P1_LCV01D"], 1),
         _pick(sensor_cols, ["P1_PP01AD"], 1)],
-    # flow · flow-ctrl · pressure · temperature
     2: [_pick(sensor_cols, ["P1_FT02"], 1),
         _pick(sensor_cols, ["P1_FCV02D"], 1),
         _pick(sensor_cols, ["P1_PCV01D"], 1),
         _pick(sensor_cols, ["P1_TIT02"], 1)],
-    # temperature · flow · valve · solenoid
     3: [_pick(sensor_cols, ["P1_TIT03"], 1),
         _pick(sensor_cols, ["P1_FT03"], 1),
         _pick(sensor_cols, ["P1_FCV03D"], 1),
@@ -231,35 +222,27 @@ SCENARIO_SENSORS = {
 }
 
 def reconstruct_past(X_windows, win_idx, stride, past_len):
-    """
-    Stitch together past_len timesteps ending at the prediction point
-    by collecting unique stride-step chunks from preceding windows.
-    X_windows: (N, enc_len, F)
-    """
     enc_len = X_windows.shape[1]
-    current = X_windows[win_idx]                        # (enc_len, F)
-    extra   = past_len - enc_len                        # timesteps before enc window
+    current = X_windows[win_idx]
+    extra   = past_len - enc_len
     if extra <= 0:
         return current[-past_len:]
-
     n_back = int(np.ceil(extra / stride))
-    parts  = []
+    parts = []
     for j in range(max(0, win_idx - n_back), win_idx):
-        parts.append(X_windows[j][:stride])             # unique leading stride steps
+        parts.append(X_windows[j][:stride])
     parts.append(current)
-    past = np.concatenate(parts, axis=0)                # (≥past_len, F)
-    return past[-past_len:]                             # exact past_len
+    past = np.concatenate(parts, axis=0)
+    return past[-past_len:]
 
-# Load test scenario labels saved in npz
-test_scenario_labels = test["scenario_labels"]   # (K,)
+test_scenario_labels = test["scenario_labels"]
 
 for scenario_id, scenario_name in SCENARIO_LABELS.items():
 
-    # choose source arrays
     if scenario_id == 0:
         X_src = X_val
         Y_src = Y_val
-        mask  = np.arange(len(X_val))          # all val windows are normal
+        mask  = np.arange(len(X_val))
     else:
         mask = np.where(test_scenario_labels == scenario_id)[0]
         X_src = X_test
@@ -269,16 +252,13 @@ for scenario_id, scenario_name in SCENARIO_LABELS.items():
         print(f"  Scenario {scenario_id}: no windows found, skipping")
         continue
 
-    # pick a window near the middle of available windows
     win_local = mask[len(mask) // 2]
-    past_data  = reconstruct_past(X_src, win_local, STRIDE, PAST_LEN)   # (past_len, F)
-    true_future = Y_src[win_local]                                        # (180, F)
+    past_data  = reconstruct_past(X_src, win_local, STRIDE, PAST_LEN)
+    true_future = Y_src[win_local]
 
-    # predict
     src_t  = torch.tensor(X_src[win_local:win_local+1]).float().to(device)
     sc_t   = torch.tensor([scenario_id]).long().to(device)
-    pred_future = model.predict(src_t, dec_len=180, scenario=sc_t
-                                ).cpu().numpy()[0]                        # (180, F)
+    pred_future = model.predict(src_t, dec_len=180, scenario=sc_t).cpu().numpy()[0]
 
     sensor_indices = SCENARIO_SENSORS[scenario_id]
     sensor_names   = [sensor_cols[idx[0]] if idx else "?" for idx in sensor_indices]
@@ -308,13 +288,14 @@ for scenario_id, scenario_name in SCENARIO_LABELS.items():
         ax.legend(fontsize=7)
 
     fig.tight_layout()
-    out_path = ROOT / f"outputs/transformer/no_causal/plots/scenario_{scenario_id}_predictions.png"
+    out_path = ROOT / f"outputs/lstm/causal/plots/scenario_{scenario_id}_predictions.png"
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close("all")
     print(f"  Saved: {out_path}")
 
 # ── Val predictions overview ──────────────────────────────────────────────────
 print("\nPlotting val predictions...")
-Path(ROOT / "outputs/transformer/no_causal/plots").mkdir(parents=True, exist_ok=True)
+Path(ROOT / "outputs/lstm/causal/plots").mkdir(parents=True, exist_ok=True)
 plot_val_predictions(model, X_val, Y_val, sensor_cols, device,
-                     dec_len=180, model_name="HAI Digital Twin Transformer")
+                     dec_len=180, model_name="HAI Digital Twin LSTM (causal)",
+                     out_path=str(ROOT / "outputs/lstm/causal/plots/val_predictions_comparison.png"))
