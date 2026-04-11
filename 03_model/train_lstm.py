@@ -1,15 +1,15 @@
 """
-train_lstm.py — Train LSTM Seq2Seq with scenario conditioning and causal loss.
+train_lstm_nocausal.py — Train LSTM Seq2Seq with scenario conditioning (no causal loss).
 
-Matches the Transformer causal training pipeline exactly:
+Matches the Transformer no‑causal training pipeline exactly:
     - Same data loading (load_and_prepare_episodic)
     - Same teacher forcing: dec_in = [last_enc_step, target[:, :-1, :]]
-    - Same loss: MSE + λ * causal_loss
+    - Same loss: MSE only
     - Same optimizer, scheduler, epochs, batch size
     - Same checkpoint format
 
 Run:
-    python 03_model/train_lstm.py
+    python 03_model/train_lstm_nocausal.py
 """
 
 import sys
@@ -23,23 +23,20 @@ sys.path.insert(0, str(ROOT / "02_data_pipeline"))
 sys.path.insert(0, str(ROOT / "03_model"))
 
 from scaled_split import load_and_prepare_episodic
-from lstm import LSTMSeq2Seq
-from causal_loss import CausalLoss
+from lstm import LSTMSeq2Seq   # the model with scenario conditioning
 
-# ── Config (identical to Transformer causal) ─────────────────────────────────
+# ── Config (identical to Transformer) ─────────────────────────────────────────
 HIDDEN_SIZE = 256
 NUM_LAYERS  = 4
 DROPOUT     = 0.1
 EPOCHS      = 50
 BATCH       = 64
 LR          = 1e-4
-LAMBDA      = 0.1          # causal loss weight — lower = better rmse, slightly higher violations
-
 ENC_LEN     = 300
 DEC_LEN     = 180
 STRIDE      = 60
 
-OUT_DIR = Path("outputs/lstm/causal")
+OUT_DIR = Path("outputs/lstm/no_causal")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 (OUT_DIR / "models").mkdir(exist_ok=True)
 (OUT_DIR / "plots").mkdir(exist_ok=True)
@@ -72,7 +69,7 @@ print(f"  X_val       : {X_val.shape}")
 print(f"  X_test      : {X_test.shape}")
 
 # ── 2. Build LSTM model (with scenario conditioning) ─────────────────────────
-print("\nStep 2: Building LSTMSeq2SeqCausal...")
+print("\nStep 2: Building LSTMSeq2Seq...")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"  Device: {device}")
 
@@ -87,16 +84,16 @@ model = LSTMSeq2Seq(
 
 print(f"  Parameters: {model.count_parameters():,}")
 
-# ── 3. Causal loss ───────────────────────────────────────────────────────────
-causal = CausalLoss("outputs/causal_graph/parents_full.json", sensor_cols)
+# ── 3. No causal loss ────────────────────────────────────────────────────────
+# (just MSE)
 
-# ── 4. Training (MSE + λ * causal_loss) ──────────────────────────────────────
-print(f"\nStep 3: Training for {EPOCHS} epochs (MSE + {LAMBDA} * causal_loss)...")
+# ── 4. Training (MSE only, teacher forcing via dec_in) ───────────────────────
+print(f"\nStep 3: Training for {EPOCHS} epochs (MSE only)...")
 optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=1e-5)
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
-mse_loss = nn.MSELoss()
-N = len(X_train)
-best_val = float("inf")
+criterion = nn.MSELoss()
+N         = len(X_train)
+best_val   = float("inf")
 best_state = model.state_dict()
 
 for epoch in range(1, EPOCHS + 1):
@@ -112,7 +109,7 @@ for epoch in range(1, EPOCHS + 1):
         # Teacher forcing: same as Transformer
         dec_in   = torch.cat([src[:, -1:, :], tgt[:, :-1, :]], dim=1)
         pred     = model(src, dec_in, scenario)
-        loss     = mse_loss(pred, tgt) + LAMBDA * causal(pred)
+        loss     = criterion(pred, tgt)   # MSE only
         optimizer.zero_grad()
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -126,10 +123,10 @@ for epoch in range(1, EPOCHS + 1):
         for i in range(0, len(X_val), BATCH):
             src      = torch.tensor(X_val[i:i+BATCH]).float().to(device)
             tgt      = torch.tensor(Y_val[i:i+BATCH]).float().to(device)
-            # Use scenario = 0 for validation (normal)
+            # Use scenario = 0 for validation (normal), same as Transformer
             scenario = torch.zeros(len(src), dtype=torch.long, device=device)
             dec_in   = torch.cat([src[:, -1:, :], tgt[:, :-1, :]], dim=1)
-            val_loss += mse_loss(model(src, dec_in, scenario), tgt).item()
+            val_loss += criterion(model(src, dec_in, scenario), tgt).item()
             n_b += 1
     val_loss /= max(1, n_b)
     scheduler.step(val_loss)
@@ -152,4 +149,4 @@ torch.save({
     "sensor_cols": sensor_cols,
 }, OUT_DIR / "models/lstm.pt")
 print(f"\nSaved: {OUT_DIR / 'models/lstm.pt'}")
-print("Run evaluation with: python 04_evaluate/run_eval_lstm_causal.py (adapt paths)")
+print("Run evaluation with: python 04_evaluate/run_eval_lstm.py (adapt paths)")

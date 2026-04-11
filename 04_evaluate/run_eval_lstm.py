@@ -1,13 +1,13 @@
 """
-run_eval.py — Evaluate Transformer (no-causal) checkpoint.
+run_eval_lstm.py — Evaluate LSTM (no-causal) checkpoint.
 
 Loads:
-    outputs/transformer/no_causal/models/transformer.pt
+    outputs/lstm/no_causal/models/lstm.pt
     outputs/scaled_split/val_data.npz
     outputs/scaled_split/test_data.npz
 
 Run:
-    python 04_evaluate/run_eval.py
+    python 04_evaluate/run_eval_lstm.py
 """
 
 import sys
@@ -20,17 +20,17 @@ EVAL_DIR = Path(__file__).parent
 sys.path.insert(0, str(ROOT / "03_model"))
 sys.path.insert(0, str(EVAL_DIR))
 
-from transformer import TransformerSeq2Seq
-from eval        import evaluate_twin
-from eval_plots  import run_all_plots
+from lstm       import LSTMSeq2Seq
+from eval       import evaluate_twin
+from eval_plots import run_all_plots
 
 # ── Config ────────────────────────────────────────────────────────────────────
 BATCH      = 64
-CHECKPOINT = ROOT / "outputs/transformer/no_causal/models/transformer.pt"
+CHECKPOINT = ROOT / "outputs/lstm/no_causal/models/lstm.pt"
 VAL_DATA   = ROOT / "outputs/scaled_split/val_data.npz"
 TEST_DATA  = ROOT / "outputs/scaled_split/test_data.npz"
-OUT_DIR    = ROOT / "outputs/transformer/no_causal"
-MODEL_NAME = "Transformer (no-causal)"
+OUT_DIR    = ROOT / "outputs/lstm/no_causal"
+MODEL_NAME = "LSTM (no-causal)"
 
 # ── Load checkpoint ───────────────────────────────────────────────────────────
 print(f"Loading checkpoint: {CHECKPOINT}")
@@ -42,10 +42,9 @@ sensor_cols = ckpt["sensor_cols"]
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"  Device: {device}  |  features: {n_feat}  |  scenarios: {n_scenarios}")
 
-model = TransformerSeq2Seq(
-    n_features=n_feat, d_model=256, n_heads=8,
-    n_layers=4, ffn_dim=1024, dropout=0.1,
-    n_scenarios=n_scenarios,
+model = LSTMSeq2Seq(
+    n_features=n_feat, n_scenarios=n_scenarios,
+    hidden_size=256, num_layers=4, dropout=0.1, output_len=180,
 ).to(device)
 model.load_state_dict(ckpt["model_state"])
 model.eval()
@@ -85,7 +84,7 @@ evaluate_twin(
     X_test=X_test, Y_test=Y_test,
     y_test=y_test,
     label=MODEL_NAME,
-    save_path=str(OUT_DIR / "transformer_metrics.json"),
+    save_path=str(OUT_DIR / "lstm_metrics.json"),
 )
 
 # ── All diagnostic plots ──────────────────────────────────────────────────────
