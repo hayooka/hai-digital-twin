@@ -16,6 +16,7 @@ Architecture:
 import torch
 import torch.nn as nn
 import numpy as np
+from typing import Optional
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -151,6 +152,89 @@ def make_predict_fn(model, batch_size=64):
                 preds.append(pred.cpu().numpy())
         return np.concatenate(preds, axis=0)
     return predict_fn
+
+
+
+# ── LSTM Plant (MIMO, autoregressive) ────────────────────────────────────────
+
+class LSTMPlant(nn.Module):
+    """
+    MIMO LSTM plant model — identical interface to GRUPlant.
+
+    Encoder : x_cv input window + scenario embedding → (h, c) hidden/cell states
+    Decoder : step-by-step concat(x_cv_target[:, t, :], pv_prev) → LSTM → FC → pv_next
+
+    LSTM retains both hidden state (h) and cell state (c), giving it stronger
+    long-range memory than GRU at the cost of ~33% more parameters.
+    Scheduled sampling mixes teacher forcing with model predictions.
+    """
+
+    def __init__(self, n_plant_in: int, n_pv: int,
+                 hidden: int = 256, layers: int = 2,
+                 n_scenarios: int = 4, emb_dim: int = 32,
+                 dropout: float = 0.1):
+        super().__init__()
+        self.n_plant_in  = n_plant_in
+        self.n_pv        = n_pv
+        self.n_scenarios = n_scenarios
+        drop = dropout if layers > 1 else 0.0
+
+        self.scenario_emb = nn.Embedding(n_scenarios, emb_dim)
+
+        self.encoder = nn.LSTM(n_plant_in + emb_dim, hidden, layers,
+                               batch_first=True, dropout=drop)
+        self.decoder = nn.LSTM(n_plant_in + n_pv, hidden, layers,
+                               batch_first=True, dropout=drop)
+        self.fc = nn.Sequential(
+            nn.Linear(hidden, 128),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(128, n_pv),
+        )
+
+    def forward(self, x_cv: torch.Tensor, x_cv_target: torch.Tensor,
+                pv_init: torch.Tensor, scenario: torch.Tensor,
+                pv_teacher: Optional[torch.Tensor] = None,
+                ss_ratio: float = 0.0) -> torch.Tensor:
+        """
+        x_cv:        (B, input_len,  n_plant_in)
+        x_cv_target: (B, target_len, n_plant_in)
+        pv_init:     (B, n_pv)
+        scenario:    (B,) int  0–3
+        pv_teacher:  (B, target_len, n_pv)  optional
+        ss_ratio:    scheduled sampling ratio
+        → (B, target_len, n_pv)
+        """
+        B, T_target, _ = x_cv_target.shape
+
+        emb = self.scenario_emb(scenario).unsqueeze(1).expand(-1, x_cv.size(1), -1)
+        _, (h, c) = self.encoder(torch.cat([x_cv, emb], dim=-1))
+
+        pv = pv_init
+        outputs = []
+
+        for t in range(T_target):
+            dec_in = torch.cat([x_cv_target[:, t, :], pv], dim=-1).unsqueeze(1)
+            out, (h, c) = self.decoder(dec_in, (h, c))
+            pv_pred = self.fc(out.squeeze(1))
+            outputs.append(pv_pred)
+
+            if pv_teacher is not None and ss_ratio > 0.0:
+                use_pred = (torch.rand(B, device=x_cv.device) < ss_ratio
+                            ).float().unsqueeze(-1)
+                pv = use_pred * pv_pred + (1 - use_pred) * pv_teacher[:, t, :]
+            elif pv_teacher is not None:
+                pv = pv_teacher[:, t, :]
+            else:
+                pv = pv_pred
+
+        return torch.stack(outputs, dim=1)
+
+    @torch.no_grad()
+    def predict(self, x_cv: torch.Tensor, x_cv_target: torch.Tensor,
+                pv_init: torch.Tensor, scenario: torch.Tensor) -> torch.Tensor:
+        self.eval()
+        return self.forward(x_cv, x_cv_target, pv_init, scenario)
 
 
 def plot_val_predictions(model, X_val, Y_val, sensor_cols, device,

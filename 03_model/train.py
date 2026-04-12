@@ -1,8 +1,13 @@
 """
-train_nocausal.py — Training entry point for the HAI Digital Twin Transformer (no causal loss).
+DEPRECATED — superseded by the three per-model training scripts.
 
-Pipeline:
-    scaled_split  →  window  →  TransformerSeq2Seq  →  checkpoint
+Use one of:
+    python 03_model/train_gru.py          # GRUPlant
+    python 03_model/train_lstm.py         # LSTMPlant
+    python 03_model/train_transformer.py  # TransformerPlant
+
+This file used TransformerSeq2Seq (full-sensor seq2seq) with the old data loader
+and is no longer compatible with the current pipeline.
 
 Run:
     python 03_model/train_nocausal.py

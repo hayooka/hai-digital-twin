@@ -1,1 +1,0 @@
-# Boiler Digital Twin package

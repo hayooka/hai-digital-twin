@@ -1,10 +1,10 @@
 """
-train_lstm.py — Train the complete HAI Digital Twin (LSTM plant variant).
+train_gru.py — Train the complete HAI Digital Twin (GRU plant variant).
 
 Per-epoch training order:
     1. Controllers (PC, LC, FC, TC) — GRUController × 4, MSE loss on CV sequence
     2. CC Classifier-Regressor       — BCE (pump on/off) + MSE (speed) combined loss
-    3. LSTMPlant                     — scheduled-sampling MSE on PV
+    3. GRUPlant                      — scheduled-sampling MSE on PV
 
 Validation (per epoch):
     Open-loop, ss_ratio=0 for all models.
@@ -13,11 +13,11 @@ Post-training:
     Closed-loop rollout over val windows (target_len horizon):
         1. Run each GRUController on input window  →  predicted CV sequence
         2. Patch x_cv_target with predicted CVs
-        3. Run LSTMPlant autoregressively          →  PV sequence
+        3. Run GRUPlant autoregressively            →  PV sequence
     Compute NRMSE per PV channel.
 
 Run:
-    python 03_model/train_lstm.py
+    python 03_model/train_gru.py
 """
 
 import sys
@@ -26,15 +26,17 @@ import numpy as np
 import torch
 import torch.nn as nn
 from pathlib import Path
+import matplotlib
+matplotlib.use("Agg")
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "02_data_pipeline"))
 sys.path.insert(0, str(ROOT / "03_model"))
 
 from pipeline import load_and_prepare_data
-from lstm import LSTMPlant
-from gru import GRUController, CCClassifierRegressor
+from gru import GRUPlant, GRUController, CCClassifierRegressor
 from config import LOOPS, PV_COLS
+from plot_results import plot_training_curves, plot_all_horizons
 
 # ── Config ────────────────────────────────────────────────────────────────────
 SEED        = 42
@@ -61,7 +63,7 @@ SS_START    = 10
 SS_END      = 100
 SS_MAX      = 0.5
 
-OUT_DIR = Path("outputs/lstm_plant")
+OUT_DIR = Path("outputs/gru_plant")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 random.seed(SEED); np.random.seed(SEED)
@@ -106,17 +108,15 @@ print(f"  Train       : {X_train.shape}   Val: {X_val.shape}")
 pv_set      = set(PV_COLS)
 non_pv_cols = [c for c in sensor_cols if c not in pv_set]
 col_to_idx  = {c: i for i, c in enumerate(non_pv_cols)}
-pv_col_to_pv_idx = {c: i for i, c in enumerate(PV_COLS)}
 
 CTRL_LOOPS = ['PC', 'LC', 'FC', 'TC']
-# Index of each loop's CV column within x_cv / x_cv_target
 ctrl_cv_col_idx = {ln: col_to_idx[LOOPS[ln].cv]
                    for ln in CTRL_LOOPS if LOOPS[ln].cv in col_to_idx}
 
 # ── 2. Build models ───────────────────────────────────────────────────────────
 print(f"\nStep 2: Building models... (device: {device})")
 
-plant_model = LSTMPlant(
+plant_model = GRUPlant(
     n_plant_in=N_PLANT_IN, n_pv=N_PV,
     hidden=HIDDEN, layers=LAYERS,
     n_scenarios=N_SCENARIOS, dropout=DROPOUT,
@@ -124,7 +124,7 @@ plant_model = LSTMPlant(
 
 ctrl_models = {
     ln: GRUController(
-        n_inputs    = ctrl_data[ln]['X_train'].shape[-1],  # 2 = [SP, PV]
+        n_inputs    = ctrl_data[ln]['X_train'].shape[-1],
         hidden      = CTRL_HIDDEN,
         layers      = CTRL_LAYERS,
         dropout     = DROPOUT,
@@ -137,7 +137,7 @@ cc_model = CCClassifierRegressor(
     n_inputs=2, hidden=CC_HIDDEN, dropout=DROPOUT
 ).to(device)
 
-print(f"  LSTMPlant   : {sum(p.numel() for p in plant_model.parameters()):,}")
+print(f"  GRUPlant    : {sum(p.numel() for p in plant_model.parameters()):,}")
 print(f"  Controllers : {sum(p.numel() for m in ctrl_models.values() for p in m.parameters()):,}")
 print(f"  CC model    : {sum(p.numel() for p in cc_model.parameters()):,}")
 
@@ -200,25 +200,23 @@ def train_cc() -> float:
     """
     One pass over CC training data.
     Loss = BCE(pump on/off) + MSE(pump speed, on-samples only).
-    Input:  last timestep of [SP, PV] window → (B, 2)
-    Labels: first target-step CV value (pump speed; 0 = off)
     """
     cc_model.train()
-    X_cc  = ctrl_data['CC']['X_train']   # (N, input_len, 2)
-    y_cc  = ctrl_data['CC']['y_train']   # (N, target_len, 1)
+    X_cc  = ctrl_data['CC']['X_train']
+    y_cc  = ctrl_data['CC']['y_train']
     N_cc  = len(X_cc)
     idx   = np.random.permutation(N_cc)
     total = 0.0
 
     for i in range(0, N_cc, BATCH):
         b         = idx[i:i + BATCH]
-        x_in      = torch.tensor(X_cc[b]).float().to(device)         # (B, input_len, 2)
-        cv_target = torch.tensor(y_cc[b, 0, 0]).float().to(device)   # first target step (B,)
+        x_in      = torch.tensor(X_cc[b]).float().to(device)
+        cv_target = torch.tensor(y_cc[b, 0, 0]).float().to(device)
 
-        pump_on_lbl = (cv_target > 0.0).float().unsqueeze(-1)        # (B, 1)
-        pump_speed  = cv_target.unsqueeze(-1)                        # (B, 1)
+        pump_on_lbl = (cv_target > 0.0).float().unsqueeze(-1)
+        pump_speed  = cv_target.unsqueeze(-1)
 
-        logit, speed = cc_model(x_in)                                # each (B, 1)
+        logit, speed = cc_model(x_in)
         loss_cls = bce(logit, pump_on_lbl)
         on_mask  = pump_on_lbl.squeeze(-1).bool()
         loss_reg = (mse(speed[on_mask], pump_speed[on_mask])
@@ -255,6 +253,10 @@ def val_cc() -> float:
 print(f"\nStep 3: Training for {EPOCHS} epochs...")
 best_plant_val   = float("inf")
 best_plant_state = plant_model.state_dict()
+
+train_losses: list[float] = []
+val_losses:   list[float] = []
+ss_ratios:    list[float] = []
 
 for epoch in range(1, EPOCHS + 1):
     ss = ss_ratio_for(epoch)
@@ -308,6 +310,10 @@ for epoch in range(1, EPOCHS + 1):
     pval /= max(1, n_b)
     plant_sch.step(pval)
 
+    train_losses.append(plant_total / max(1, N // BATCH))
+    val_losses.append(pval)
+    ss_ratios.append(ss)
+
     if pval < best_plant_val:
         best_plant_val   = pval
         best_plant_state = {k: v.clone() for k, v in plant_model.state_dict().items()}
@@ -322,16 +328,14 @@ for epoch in range(1, EPOCHS + 1):
 plant_model.load_state_dict(best_plant_state)
 print(f"\n  Best plant val loss: {best_plant_val:.5f}")
 
-# ── 5. Closed-loop validation (target_len-step horizon) ───────────────────────
-# Strategy:
-#   1. Run each GRUController on its val input window → predicted CV sequence
-#   2. Patch x_cv_target with predicted CVs (replacing true CVs)
-#   3. Run LSTMPlant autoregressively → predicted PV sequence
-#   4. Compute NRMSE vs true PV target
-#
-# Note: this is a one-shot controller rollout (not step-by-step PV feedback).
-# Full step-by-step closed-loop (with PV feedback to controllers each step)
-# is implemented in the separate inference script.
+# ── Plot 1: Training loss curves ──────────────────────────────────────────────
+plot_training_curves(
+    train_losses, val_losses, ss_ratios,
+    model_name="GRU",
+    save_path=OUT_DIR / "gru_loss_curves.png",
+)
+
+# ── 5. Closed-loop validation ─────────────────────────────────────────────────
 print(f"\nStep 4: Closed-loop validation ({TARGET_LEN}-step / ~{TARGET_LEN//60}-min horizon)...")
 for m in ctrl_models.values(): m.eval()
 cc_model.eval()
@@ -342,28 +346,25 @@ pv_preds = np.zeros((N_val, TARGET_LEN, N_PV), dtype=np.float32)
 
 with torch.no_grad():
     for i in range(0, N_val, BATCH):
-        sl       = slice(i, i + BATCH)
-        x_cv_b   = torch.tensor(X_val[sl]).float().to(device)
-        xct_b    = torch.tensor(X_cv_tgt_val[sl]).float().to(device).clone()
+        sl        = slice(i, i + BATCH)
+        x_cv_b    = torch.tensor(X_val[sl]).float().to(device)
+        xct_b     = torch.tensor(X_cv_tgt_val[sl]).float().to(device).clone()
         pv_init_b = torch.tensor(pv_init_val[sl]).float().to(device)
-        sc_b     = torch.tensor(scenario_val[sl]).long().to(device)
+        sc_b      = torch.tensor(scenario_val[sl]).long().to(device)
 
-        # Predict CVs from controllers and patch x_cv_target
         for ln in CTRL_LOOPS:
             if ln not in ctrl_cv_col_idx:
                 continue
             Xc      = torch.tensor(ctrl_data[ln]['X_val'][sl]).float().to(device)
-            cv_pred = ctrl_models[ln].predict(Xc, target_len=TARGET_LEN)  # (B, T, 1)
+            cv_pred = ctrl_models[ln].predict(Xc, target_len=TARGET_LEN)
             cv_i    = ctrl_cv_col_idx[ln]
             xct_b[:, :, cv_i:cv_i + 1] = cv_pred
 
-        # Autoregressive plant rollout with patched CV targets
-        pv_seq = plant_model.predict(x_cv_b, xct_b, pv_init_b, sc_b)  # (B, T, n_pv)
+        pv_seq   = plant_model.predict(x_cv_b, xct_b, pv_init_b, sc_b)
         B_actual = pv_seq.size(0)
         pv_preds[i:i + B_actual] = pv_seq.cpu().numpy()
 
-# NRMSE per PV channel
-pv_true = pv_target_val   # (N_val, target_len, n_pv)
+pv_true = pv_target_val
 nrmse   = []
 for k in range(N_PV):
     true_k = pv_true[:, :, k]
@@ -372,11 +373,33 @@ for k in range(N_PV):
     rng    = max(float(true_k.max() - true_k.min()), 1e-6)
     nrmse.append(rmse / rng)
 
-pv_names = PV_COLS
 print("  Closed-loop NRMSE per PV:")
-for name, v in zip(pv_names, nrmse):
+for name, v in zip(PV_COLS, nrmse):
     print(f"    {name:<30s}: {v:.4f}")
 print(f"  Mean NRMSE: {np.mean(nrmse):.4f}")
+
+# ── Plots 2–5: closed-loop time series for each horizon ───────────────────────
+# pv_preds / pv_true: (N_val, TARGET_LEN, N_PV) — use first sample for illustration.
+# We slice each horizon from the same fixed-length arrays; if your TARGET_LEN is
+# shorter than a requested horizon the slice just clips to TARGET_LEN.
+print("\nStep 4b: Generating closed-loop horizon plots...")
+
+HORIZONS = [300, 600, 900, 1800]
+horizon_data: dict = {}
+sample_idx = 0   # representative validation sample to plot
+
+for H in HORIZONS:
+    steps = min(H, TARGET_LEN)
+    horizon_data[H] = (
+        pv_true[sample_idx, :steps, :],    # (steps, N_PV)
+        pv_preds[sample_idx, :steps, :],   # (steps, N_PV)
+    )
+
+plot_all_horizons(
+    horizon_data, PV_COLS,
+    model_name="GRU",
+    out_dir=OUT_DIR,
+)
 
 # ── 6. Save checkpoints ───────────────────────────────────────────────────────
 print(f"\nStep 5: Saving checkpoints to {OUT_DIR}/")
@@ -388,8 +411,8 @@ torch.save({
     "n_scenarios": N_SCENARIOS,
     "hidden":      HIDDEN,
     "layers":      LAYERS,
-}, OUT_DIR / "lstm_plant.pt")
-print(f"  Saved: lstm_plant.pt")
+}, OUT_DIR / "gru_plant.pt")
+print(f"  Saved: gru_plant.pt")
 
 for ln, m in ctrl_models.items():
     torch.save({

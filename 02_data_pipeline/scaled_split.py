@@ -2,23 +2,33 @@
 scaled_split_episodic.py — Split and normalize HAI + HAIEnd processed data.
 Handles each file as a separate episode for Transformer seq2seq.
 
-CRITICAL CHANGE: train4 is COMPLETELY HELD OUT for testing causal generalization.
+DATA TIMELINE (HAI 23.05 based on technical documentation):
+- August 12, 2022 (starting 16:25)
+- August 13, 2022 (starting 00:25)
+- August 17, 2022 (starting 08:36)
+
+CRITICAL CHANGES:
+1. train4 is COMPLETELY HELD OUT for testing causal generalization
+2. train3 is SPLIT: first 30% to TRAIN, last 70% to VALIDATION
+3. Scaler fitted ONLY on train1 (100%) + train2 (100%) + train3_first30%
+4. Attack segments: 80/20 stratified split by type (AP_no, AP_with, AE_no)
 
 Pipeline
 --------
-Step 1 : train1, train2, train3 only for training/validation
-         Split each episode 80/20 (time-ordered, no shuffle)
-Step 2 : train4 is COMPLETELY HELD OUT (never seen during training)
-Step 3 : Extract attack segments from test1 + test2
-Step 4 : Split attack segments 80/20 (by segment, not by row)
-         80% → training (with train1-3)
-         20% → testing (with train4)
-Step 5 : Fit scaler on train1-3 normal data ONLY
-Step 6 : Create sliding windows
+Step 1 : Load train1 (100%), train2 (100%), train3 (100%)
+Step 2 : Split train3 temporally: first 30% → train, last 70% → validation
+Step 3 : train4 is COMPLETELY HELD OUT (never seen during training)
+Step 4 : Extract attack segments from test1 + test2
+Step 5 : Stratified split attack segments 80/20 by attack type:
+         - AP_no (label 1): 27 train / 7 test
+         - AP_with (label 2): 8 train / 2 test
+         - AE_no (label 3): 6 train / 2 test
+Step 6 : Fit scaler on train1 (100%) + train2 (100%) + train3_first30% NORMAL data ONLY
+Step 7 : Create sliding windows
 
 Test Sets (truly unseen):
 ├── train4 (100%) → Tests cross-period generalization of normal behavior
-└── 20% of attack segments → Tests attack trajectory prediction
+└── 20% of attack segments (stratified) → Tests attack trajectory prediction
 """
 
 from __future__ import annotations
@@ -29,10 +39,11 @@ import joblib
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from typing import List, Dict, Tuple, Optional
+from config import LOOPS
 
 PROCESSED_DIR      = "data/processed"
 OUTPUT_DIR         = "outputs/scaled_split"
-TRAIN_RATIO        = 0.80          # For temporal split within train1-3
+TRAIN3_RATIO       = 0.30          # First 30% of train3 goes to train, 70% to validation
 ATTACK_SPLIT_RATIO = 0.80          # 80% attacks to train, 20% to test
 BEFORE_ATTACK_SEC  = 300
 AFTER_ATTACK_SEC   = 180
@@ -55,20 +66,24 @@ def get_scenario_label(attack_type: str, combination: str = "no") -> int:
     """
     Map attack_type + combination to scenario label.
     
+    Based on HAI 23.05 attack documentation:
+    - AP_no: 34 total (27 train, 7 test)
+    - AP_with: 10 total (8 train, 2 test)
+    - AE_no: 8 total (6 train, 2 test)
+    
     Returns:
         0: normal
         1: AP without combination  
         2: AP with combination
         3: AE without combination
-        4: AE with combination
     """
     if pd.isna(attack_type) or attack_type == "normal":
         return 0
     if attack_type == "AP":
         return 1 if str(combination).strip().lower() == "no" else 2
     if attack_type == "AE":
-        return 3 if str(combination).strip().lower() == "no" else 4
-    return 0  # fallback
+        return 3  # AE_no only (AE_with not in dataset per documentation)
+    return 0
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -132,6 +147,18 @@ def _extract_attack_segments(df: pd.DataFrame,
     return segments
 
 
+def _remove_constant_cols(sensor_cols: list[str], fit_df: pd.DataFrame) -> list[str]:
+    """Drop columns whose std is zero (or near-zero) in the scaler-fit data."""
+    stds = fit_df[sensor_cols].std()
+    const = [c for c in sensor_cols if stds[c] < 1e-8]
+    if const:
+        print(f"  Removing {len(const)} constant columns: "
+              f"{const[:5]}{'...' if len(const) > 5 else ''}")
+    else:
+        print("  No constant columns found.")
+    return [c for c in sensor_cols if c not in set(const)]
+
+
 def create_forecasting_windows(
     df: pd.DataFrame,
     sensor_cols: list[str],
@@ -148,7 +175,7 @@ def create_forecasting_windows(
         X: (n_windows, input_len, n_features)
         y: (n_windows, target_len, n_features)
         attack_flags: (n_windows,) - 1 if attack in target window (binary)
-        scenario_labels: (n_windows,) - 0-4 multi-class labels
+        scenario_labels: (n_windows,) - 0-3 multi-class labels
         metadata: List of window identifiers
     """
     total_length = input_len + target_len
@@ -187,7 +214,7 @@ def create_forecasting_windows(
         # Check if attack occurs in the target window
         attack_in_target = (df['label'].iloc[i + input_len:i + input_len + target_len] > 0).any()
         
-        # Get scenario label (0 for normal, 1-4 for different attacks)
+        # Get scenario label (0 for normal, 1-3 for different attacks)
         if has_scenario and attack_in_target:
             # Use the scenario_label from the attack segment
             target_scenarios = df['scenario_label'].iloc[i + input_len:i + input_len + target_len]
@@ -219,7 +246,7 @@ def create_forecasting_windows(
 def load_and_prepare_episodic(
     processed_dir: str = PROCESSED_DIR,
     output_dir: str = OUTPUT_DIR,
-    train_ratio: float = TRAIN_RATIO,
+    train3_ratio: float = TRAIN3_RATIO,
     attack_split_ratio: float = ATTACK_SPLIT_RATIO,
     before_attack_sec: int = BEFORE_ATTACK_SEC,
     after_attack_sec: int = AFTER_ATTACK_SEC,
@@ -232,66 +259,88 @@ def load_and_prepare_episodic(
     """
     Load data with train4 COMPLETELY HELD OUT for testing causal generalization.
     
-    TRAIN (never sees train4 or test attacks):
-    ├── train1 (80% train / 20% val)
-    ├── train2 (80% train / 20% val)  
-    ├── train3 (80% train / 20% val)
-    └── 80% of attack segments (from test1/test2)
+    SCALER FIT (normal only):
+        - train1 (100%)
+        - train2 (100%)
+        - train3 (first 30% temporally)
     
-    TEST (truly unseen):
-    ├── train4 (100%) → Tests cross-period generalization of normal behavior
-    └── 20% of attack segments → Tests attack trajectory prediction
+    TRAIN (model training):
+        - train1 (100%)
+        - train2 (100%)
+        - train3 (first 30%)
+        - 80% of attacks (stratified, ~42 segments)
+    
+    VALIDATION:
+        - train3 (last 70% temporally) ← normal only for tuning
+    
+    TEST:
+        - train4 (100%) ← unseen normal
+        - 20% of attacks (stratified, ~10 segments) ← unseen attacks
+    
+    Attack distribution (HAI 23.05):
+        - AP_no (label 1): 34 total → 27 train, 7 test
+        - AP_with (label 2): 10 total → 8 train, 2 test
+        - AE_no (label 3): 8 total → 6 train, 2 test
     """
     os.makedirs(output_dir, exist_ok=True)
     np.random.seed(random_seed)
 
-    # ── Step 1: Load train1, train2, train3 ONLY ──────────────────────────────
+    # ── Step 1: Load train1, train2, train3 ──────────────────────────────────
     print("\n" + "="*70)
-    print("[Step 1] Loading train1, train2, train3 (train4 is HELD OUT for testing)")
+    print("[Step 1] Loading train1, train2, train3")
     print("="*70)
     
-    train_episodes = []      # 80% of train1-3
-    val_episodes = []        # 20% of train1-3
-    sensor_cols: list[str] = []
+    train1_df = _load(os.path.join(processed_dir, "train1.csv"))
+    train2_df = _load(os.path.join(processed_dir, "train2.csv"))
+    train3_df = _load(os.path.join(processed_dir, "train3.csv"))
     
-    for n in range(1, 4):  # ONLY train1, train2, train3
-        df = _load(os.path.join(processed_dir, f"train{n}.csv"))
-        
-        if not sensor_cols:
-            sensor_cols = _sensor_cols(df)
-            print(f"  Sensor features: {len(sensor_cols)}")
-            print(f"  Sample sensors: {sensor_cols[:5]}")
-        
-        # Add scenario_label column (all 0 for normal data)
-        df['scenario_label'] = 0
-        
-        # Temporal split within episode
-        cut = int(len(df) * train_ratio)
-        train_part = df.iloc[:cut].copy()
-        val_part = df.iloc[cut:].copy()
-        
-        # Add episode metadata
-        train_part['episode_id'] = f"train{n}"
-        val_part['episode_id'] = f"train{n}"
-        
-        train_episodes.append(train_part)
-        val_episodes.append(val_part)
-        
-        print(f"  train{n}: {len(df):,} rows -> train: {len(train_part):,} ({train_ratio:.0%}), val: {len(val_part):,} ({(1-train_ratio):.0%})")
+    # Get sensor columns from first file
+    sensor_cols = _sensor_cols(train1_df)
+    print(f"  Sensor features: {len(sensor_cols)}")
+    print(f"  Sample sensors: {sensor_cols[:5]}")
     
-    # ── Step 2: Load train4 as TEST (completely unseen) ───────────────────────
+    print(f"  train1: {len(train1_df):,} rows")
+    print(f"  train2: {len(train2_df):,} rows")
+    print(f"  train3: {len(train3_df):,} rows")
+    
+    # ── Step 2: Split train3 temporally ──────────────────────────────────────
     print("\n" + "="*70)
-    print("[Step 2] Loading train4 as TEST (completely held out for causal generalization)")
+    print(f"[Step 2] Splitting train3: first {train3_ratio:.0%} to train, last {1-train3_ratio:.0%} to validation")
     print("="*70)
     
-    train4_df = _load(os.path.join(processed_dir, f"train4.csv"))
+    cut_idx = int(len(train3_df) * train3_ratio)
+    train3_train_part = train3_df.iloc[:cut_idx].copy()
+    train3_val_part = train3_df.iloc[cut_idx:].copy()
+    
+    # Add scenario_label (all 0 for normal data)
+    train1_df['scenario_label'] = 0
+    train2_df['scenario_label'] = 0
+    train3_train_part['scenario_label'] = 0
+    train3_val_part['scenario_label'] = 0
+    
+    # Add episode metadata
+    train1_df['episode_id'] = "train1"
+    train2_df['episode_id'] = "train2"
+    train3_train_part['episode_id'] = "train3_train"
+    train3_val_part['episode_id'] = "train3_val"
+    
+    print(f"  train3: {len(train3_df):,} rows total")
+    print(f"    → train part (first {train3_ratio:.0%}): {len(train3_train_part):,} rows")
+    print(f"    → val part (last {1-train3_ratio:.0%}): {len(train3_val_part):,} rows")
+    
+    # ── Step 3: Load train4 as TEST (completely unseen) ──────────────────────
+    print("\n" + "="*70)
+    print("[Step 3] Loading train4 as TEST (completely held out for causal generalization)")
+    print("="*70)
+    
+    train4_df = _load(os.path.join(processed_dir, "train4.csv"))
     train4_df['episode_id'] = "train4_TEST"
-    train4_df['scenario_label'] = 0  # Normal data
+    train4_df['scenario_label'] = 0
     print(f"  train4: {len(train4_df):,} rows (COMPLETELY UNSEEN during training)")
     
-    # ── Step 3: Extract attack segments from test1 + test2 ────────────────────
+    # ── Step 4: Extract attack segments from test1 + test2 ────────────────────
     print("\n" + "="*70)
-    print("[Step 3] Extracting attack segments from test1, test2")
+    print("[Step 4] Extracting attack segments from test1, test2")
     print("="*70)
     
     all_attack_segments: list[pd.DataFrame] = []
@@ -313,10 +362,21 @@ def load_and_prepare_episodic(
     
     print(f"  Total attack segments: {len(all_attack_segments)}")
     
-    # ── Step 4: Split attack segments (80% train, 20% test) ───────────────────
+    # ── Step 5: Stratified split attack segments by scenario label ────────────
     print("\n" + "="*70)
-    print(f"[Step 4] Splitting attack segments {attack_split_ratio:.0%} train / {1-attack_split_ratio:.0%} test")
+    print(f"[Step 5] Stratified splitting attack segments {attack_split_ratio:.0%} train / {1-attack_split_ratio:.0%} test")
     print("="*70)
+    
+    # Get scenario labels for stratification
+    segment_labels = [seg['scenario_label'].iloc[0] for seg in all_attack_segments]
+    
+    # Count by type
+    from collections import Counter
+    label_counts = Counter(segment_labels)
+    print(f"  Attack segments by scenario label:")
+    for label in sorted(label_counts.keys()):
+        label_name = {1: "AP_no", 2: "AP_with", 3: "AE_no"}.get(label, f"unknown_{label}")
+        print(f"    label {label} ({label_name}): {label_counts[label]} segments")
     
     if len(all_attack_segments) == 0:
         attack_train_segments = []
@@ -331,42 +391,85 @@ def load_and_prepare_episodic(
             all_attack_segments,
             train_size=attack_split_ratio,
             random_state=random_seed,
-            shuffle=True
+            stratify=segment_labels  # Stratify by scenario label
         )
-        print(f"  Attack train: {len(attack_train_segments)} segments (will be used with train1-3)")
-        print(f"  Attack test:  {len(attack_test_segments)} segments (will be used with train4)")
+        
+        # Verify stratification
+        train_labels = [seg['scenario_label'].iloc[0] for seg in attack_train_segments]
+        test_labels = [seg['scenario_label'].iloc[0] for seg in attack_test_segments]
+        print(f"  Attack train: {len(attack_train_segments)} segments")
+        print(f"    - AP_no (1): {train_labels.count(1)} segments")
+        print(f"    - AP_with (2): {train_labels.count(2)} segments")
+        print(f"    - AE_no (3): {train_labels.count(3)} segments")
+        print(f"  Attack test: {len(attack_test_segments)} segments")
+        print(f"    - AP_no (1): {test_labels.count(1)} segments")
+        print(f"    - AP_with (2): {test_labels.count(2)} segments")
+        print(f"    - AE_no (3): {test_labels.count(3)} segments")
     
-    # ── Step 5: Fit scaler on NORMAL data from train1-3 ONLY ──────────────────
+    # ── Step 6: Fit scaler on NORMAL data from train1, train2, train3_first30% ──
     print("\n" + "="*70)
-    print("[Step 5] Fitting scaler on normal data from train1-3 ONLY")
+    print("[Step 6] Fitting scaler on normal data from train1 + train2 + train3_first30%")
     print("="*70)
     
-    all_normal_data = pd.concat(
-        [ep[ep['label'] == 0] for ep in train_episodes],
-        ignore_index=True
-    )
-    print(f"  Total normal samples for fitting: {len(all_normal_data):,} (from train1, train2, train3)")
-    
+    # Collect normal data from:
+    # - train1 (100%)
+    # - train2 (100%)
+    # - train3_first30% (normal only)
+    scaler_fit_data = pd.concat([
+        train1_df[train1_df['label'] == 0],
+        train2_df[train2_df['label'] == 0],
+        train3_train_part[train3_train_part['label'] == 0],
+    ], ignore_index=True)
+
+    # Remove constant columns (zero variance across all fit data)
+    sensor_cols = _remove_constant_cols(sensor_cols, scaler_fit_data)
+
+    print(f"  Total normal samples for fitting: {len(scaler_fit_data):,}")
+    print(f"    - train1 normal: {len(train1_df[train1_df['label'] == 0]):,}")
+    print(f"    - train2 normal: {len(train2_df[train2_df['label'] == 0]):,}")
+    print(f"    - train3_first30% normal: {len(train3_train_part[train3_train_part['label'] == 0]):,}")
+    print(f"  NOTE: train3_last70% and train4 were NOT used for fitting scaler!")
+
+    # Plant scaler (all sensor cols, normal data only)
     scaler = StandardScaler()
-    scaler.fit(all_normal_data[sensor_cols].values.astype(np.float32))
-    
+    scaler.fit(scaler_fit_data[sensor_cols].values.astype(np.float32))
+    scaler.scale_ = np.maximum(np.asarray(scaler.scale_), 1e-6)   # avoid division by near-zero
     scaler_path = os.path.join(output_dir, "scaler.pkl")
     joblib.dump(scaler, scaler_path)
-    print(f"  Scaler saved to {scaler_path}")
-    print(f"  NOTE: train4 was NOT used for fitting scaler!")
+    print(f"  Plant scaler saved to {scaler_path}")
+
+    # Per-loop controller scalers ([SP, PV, CV] for each loop, normal data only)
+    print("  Fitting per-loop controller scalers...")
+    ctrl_scalers: Dict[str, dict] = {}
+    for ln, loop in LOOPS.items():
+        ctrl_cols = [c for c in [loop.sp, loop.pv, loop.cv] if c in sensor_cols]
+        if len(ctrl_cols) == 3:
+            cs = StandardScaler()
+            cs.fit(scaler_fit_data[ctrl_cols].values.astype(np.float32))
+            cs.scale_ = np.maximum(np.asarray(cs.scale_), 1e-6)
+            ctrl_scalers[ln] = {'scaler': cs, 'cols': ctrl_cols}
+            joblib.dump(ctrl_scalers[ln], os.path.join(output_dir, f"ctrl_scaler_{ln}.pkl"))
+            print(f"    [{ln}] fitted on {ctrl_cols}")
+        else:
+            print(f"    [{ln}] WARNING: missing columns ({ctrl_cols}), skipping")
     
-    # ── Step 6: Create forecasting windows for each split ─────────────────────
+    # ── Step 7: Create forecasting windows for each split ─────────────────────
     print("\n" + "="*70)
-    print(f"[Step 6] Creating forecasting windows (input={input_len}s, target={target_len}s, stride={stride}s)")
+    print(f"[Step 7] Creating forecasting windows (input={input_len}s, target={target_len}s, stride={stride}s)")
     print("="*70)
     
-    # Process training normal episodes (train1-3, 80% portions)
-    print("\n  TRAIN NORMAL (from train1-3, 80% portions):")
+    # Training windows: train1 + train2 + train3_train_part
+    print("\n  TRAIN NORMAL (train1, train2, train3_first30%):")
+    train_normal_dfs = [
+        ('train1', train1_df),
+        ('train2', train2_df),
+        ('train3_train', train3_train_part)
+    ]
+    
     train_normal_windows = []
-    for episode in train_episodes:
-        ep_id = episode['episode_id'].iloc[0]
+    for name, df in train_normal_dfs:
         X, y, attack_labels, scenario_labels, meta = create_forecasting_windows(
-            episode, sensor_cols, input_len, target_len, stride, scaler, ep_id
+            df, sensor_cols, input_len, target_len, stride, scaler, name
         )
         if len(X) > 0:
             train_normal_windows.append({
@@ -375,34 +478,20 @@ def load_and_prepare_episodic(
                 'attack_labels': attack_labels,
                 'scenario_labels': scenario_labels,
                 'metadata': meta, 
-                'episode_id': ep_id
+                'episode_id': name
             })
             n_attack_windows = attack_labels.sum()
-            unique_scenarios = np.unique(scenario_labels)
-            print(f"    {ep_id}: {len(X)} windows (attack_in_target={n_attack_windows}, scenarios={unique_scenarios})")
+            print(f"    {name}: {len(X):,} windows (attack_in_target={n_attack_windows})")
     
-    # Process validation normal episodes (train1-3, 20% portions)
-    print("\n  VALIDATION NORMAL (from train1-3, 20% portions):")
-    val_normal_windows = []
-    for episode in val_episodes:
-        ep_id = episode['episode_id'].iloc[0]
-        X, y, attack_labels, scenario_labels, meta = create_forecasting_windows(
-            episode, sensor_cols, input_len, target_len, stride, scaler, ep_id
-        )
-        if len(X) > 0:
-            val_normal_windows.append({
-                'X': X, 
-                'y': y, 
-                'attack_labels': attack_labels,
-                'scenario_labels': scenario_labels,
-                'metadata': meta, 
-                'episode_id': ep_id
-            })
-            n_attack_windows = attack_labels.sum()
-            print(f"    {ep_id}: {len(X)} windows (attack_in_target={n_attack_windows})")
+    # Validation windows: train3_val_part (normal only)
+    print("\n  VALIDATION NORMAL (train3_last70%):")
+    X_val, y_val, attack_val_labels, scenario_val, meta_val = create_forecasting_windows(
+        train3_val_part, sensor_cols, input_len, target_len, stride, scaler, "train3_val"
+    )
+    print(f"    train3_val: {len(X_val):,} windows (attack_in_target={attack_val_labels.sum()})")
     
-    # Process attack training segments
-    print("\n  TRAIN ATTACK (80% of attack segments):")
+    # Attack training windows (80% of attack segments)
+    print("\n  TRAIN ATTACK (80% of attack segments, stratified):")
     attack_train_windows = []
     for episode in attack_train_segments:
         ep_id = episode['episode_id'].iloc[0]
@@ -418,31 +507,18 @@ def load_and_prepare_episodic(
                 'metadata': meta, 
                 'episode_id': ep_id
             })
-            n_attack_windows = attack_labels.sum()
             unique_scenarios = np.unique(scenario_labels)
-            print(f"    {ep_id}: {len(X)} windows (attack_in_target={n_attack_windows}, scenarios={unique_scenarios})")
+            print(f"    {ep_id}: {len(X)} windows (scenarios={unique_scenarios})")
     
-    # Process TEST normal (train4 - completely unseen!)
+    # Test normal: train4 (100%)
     print("\n  TEST NORMAL (train4 - COMPLETELY UNSEEN during training):")
-    test_normal_windows = []
-    X_test_normal, y_test_normal, attack_labels_normal, scenario_labels_normal, meta_test_normal = create_forecasting_windows(
+    X_test_normal, y_test_normal, attack_test_normal_labels, scenario_test_normal, meta_test_normal = create_forecasting_windows(
         train4_df, sensor_cols, input_len, target_len, stride, scaler, "train4_TEST"
     )
-    if len(X_test_normal) > 0:
-        test_normal_windows.append({
-            'X': X_test_normal, 
-            'y': y_test_normal, 
-            'attack_labels': attack_labels_normal,
-            'scenario_labels': scenario_labels_normal,
-            'metadata': meta_test_normal, 
-            'episode_id': "train4_TEST"
-        })
-        n_attack_windows = attack_labels_normal.sum()
-        unique_scenarios = np.unique(scenario_labels_normal)
-        print(f"    train4_TEST: {len(X_test_normal)} windows (attack_in_target={n_attack_windows}, scenarios={unique_scenarios}) - CAUSAL GENERALIZATION TEST")
+    print(f"    train4_TEST: {len(X_test_normal):,} windows - CAUSAL GENERALIZATION TEST")
     
-    # Process TEST attack (20% of attack segments)
-    print("\n  TEST ATTACK (20% of attack segments):")
+    # Test attack windows (20% of attack segments)
+    print("\n  TEST ATTACK (20% of attack segments, stratified):")
     attack_test_windows = []
     for episode in attack_test_segments:
         ep_id = episode['episode_id'].iloc[0]
@@ -458,18 +534,17 @@ def load_and_prepare_episodic(
                 'metadata': meta, 
                 'episode_id': ep_id
             })
-            n_attack_windows = attack_labels.sum()
             unique_scenarios = np.unique(scenario_labels)
-            print(f"    {ep_id}: {len(X)} windows (attack_in_target={n_attack_windows}, scenarios={unique_scenarios})")
+            print(f"    {ep_id}: {len(X)} windows (scenarios={unique_scenarios})")
     
-    # ── Step 7: Combine all windows (always create arrays) ────────────────────
+    # ── Step 8: Combine all windows ───────────────────────────────────────────
     print("\n" + "="*70)
-    print("[Step 7] Combining windows into final arrays")
+    print("[Step 8] Combining windows into final arrays")
     print("="*70)
     
     # Combine training windows (normal + attack)
-    if train_normal_windows or attack_train_windows:
-        all_train_windows = train_normal_windows + attack_train_windows
+    all_train_windows = train_normal_windows + attack_train_windows
+    if all_train_windows:
         X_train = np.concatenate([w['X'] for w in all_train_windows], axis=0)
         y_train = np.concatenate([w['y'] for w in all_train_windows], axis=0)
         attack_train_labels = np.concatenate([w['attack_labels'] for w in all_train_windows], axis=0)
@@ -480,20 +555,15 @@ def load_and_prepare_episodic(
         attack_train_labels = np.empty(0, dtype=np.int32)
         scenario_train = np.empty(0, dtype=np.int32)
     
-    # Validation windows (normal only)
-    if val_normal_windows:
-        X_val = np.concatenate([w['X'] for w in val_normal_windows], axis=0)
-        y_val = np.concatenate([w['y'] for w in val_normal_windows], axis=0)
-        attack_val_labels = np.concatenate([w['attack_labels'] for w in val_normal_windows], axis=0)
-        scenario_val = np.concatenate([w['scenario_labels'] for w in val_normal_windows], axis=0)
-    else:
-        X_val = np.empty((0, input_len, len(sensor_cols)), dtype=np.float32)
-        y_val = np.empty((0, target_len, len(sensor_cols)), dtype=np.float32)
-        attack_val_labels = np.empty(0, dtype=np.int32)
-        scenario_val = np.empty(0, dtype=np.int32)
+    # Validation (normal only)
+    X_val = X_val
+    y_val = y_val
+    attack_val_labels = attack_val_labels
+    scenario_val = scenario_val
     
-    # Test windows (normal from train4 + attack segments)
-    all_test_windows = test_normal_windows + attack_test_windows
+    # Test (normal + attack)
+    all_test_windows = [{'X': X_test_normal, 'y': y_test_normal, 'attack_labels': attack_test_normal_labels, 
+                         'scenario_labels': scenario_test_normal}] + attack_test_windows
     if all_test_windows:
         X_test = np.concatenate([w['X'] for w in all_test_windows], axis=0)
         y_test = np.concatenate([w['y'] for w in all_test_windows], axis=0)
@@ -505,8 +575,7 @@ def load_and_prepare_episodic(
         attack_test_labels = np.empty(0, dtype=np.int32)
         scenario_test = np.empty(0, dtype=np.int32)
     
-    # Get number of unique scenarios
-    n_scenarios = 4  # 0=normal, 1=AP_no, 2=AP_comb, 3=AE_no
+    n_scenarios = 4  # 0=normal, 1=AP_no, 2=AP_with, 3=AE_no
     
     # ── Save to disk if requested ────────────────────────────────────────────
     if save_windows:
@@ -533,7 +602,7 @@ def load_and_prepare_episodic(
             scenario_labels=scenario_test
         )
         
-        # Also save metadata
+        # Save metadata
         metadata = {
             'sensor_cols': sensor_cols,
             'input_len': input_len,
@@ -547,10 +616,22 @@ def load_and_prepare_episodic(
                 2: 'AP_with_combination',
                 3: 'AE_no_combination',
             },
-            'train_files_used': ['train1', 'train2', 'train3'],
-            'test_files_used': ['train4'],
+            'data_timeline': {
+                'dataset': 'HAI 23.05',
+                'dates': ['August 12, 2022', 'August 13, 2022', 'August 17, 2022']
+            },
+            'scaler_fit_sources': ['train1 (100%)', 'train2 (100%)', 'train3_first30%'],
+            'train_sources': ['train1 (100%)', 'train2 (100%)', 'train3_first30%'],
+            'val_source': ['train3_last70%'],
+            'test_sources': ['train4 (100% - causal test)', '20% attack segments'],
+            'attack_split': {
+                'AP_no': {'total': 34, 'train': 27, 'test': 7},
+                'AP_with': {'total': 10, 'train': 8, 'test': 2},
+                'AE_no': {'total': 8, 'train': 6, 'test': 2},
+            },
             'n_attack_segments_train': len(attack_train_segments),
             'n_attack_segments_test': len(attack_test_segments),
+            'ctrl_scaler_loops': list(ctrl_scalers.keys()),
         }
         joblib.dump(metadata, os.path.join(output_dir, "metadata.pkl"))
         
@@ -558,32 +639,42 @@ def load_and_prepare_episodic(
         print(f"    train_data.npz: X={X_train.shape}, y={y_train.shape}")
         print(f"    val_data.npz:   X={X_val.shape}, y={y_val.shape}")
         print(f"    test_data.npz:  X={X_test.shape}, y={y_test.shape}")
-        print(f"    metadata.pkl:   saved (n_scenarios={n_scenarios})")
+        print(f"    metadata.pkl:   saved")
     
     # ── Final Summary ─────────────────────────────────────────────────────────
     print("\n" + "="*70)
-    print("FINAL SUMMARY - train4 COMPLETELY HELD OUT")
+    print("FINAL SUMMARY - HAI 23.05 (Aug 12-13, Aug 17, 2022)")
     print("="*70)
     
+    print("\n  SCALER FIT (normal only):")
+    print("    - train1 (100%)")
+    print("    - train2 (100%)")
+    print("    - train3 (first 30% temporally)")
+    
     print("\n  TRAIN SET (model sees this):")
-    print(f"    - train1, train2, train3 (80% portions each)")
+    print(f"    - train1 (100%): {len(train1_df):,} rows")
+    print(f"    - train2 (100%): {len(train2_df):,} rows")
+    print(f"    - train3 (first 30%): {len(train3_train_part):,} rows")
     print(f"    - {len(attack_train_segments)} attack segments (80% of total)")
     print(f"    - X_train shape: {X_train.shape}")
-    print(f"    - Scenario distribution: {dict(zip(*np.unique(scenario_train, return_counts=True)))}" if len(scenario_train) > 0 else "")
     
     print("\n  VALIDATION SET (for early stopping/hyperparameters):")
-    print(f"    - train1, train2, train3 (20% portions each)")
+    print(f"    - train3 (last 70%): {len(train3_val_part):,} rows (normal only)")
     print(f"    - X_val shape: {X_val.shape}")
     
     print("\n  TEST SET (truly unseen - FINAL EVALUATION ONLY):")
-    print(f"    - train4 (100%) → Tests causal generalization across periods")
+    print(f"    - train4 (100%): {len(train4_df):,} rows → Tests causal generalization")
     print(f"    - {len(attack_test_segments)} attack segments (20% of total) → Tests attack prediction")
     print(f"    - X_test shape: {X_test.shape}")
-    print(f"    - Scenario distribution: {dict(zip(*np.unique(scenario_test, return_counts=True)))}" if len(scenario_test) > 0 else "")
     
-    print(f"\n  Number of scenario classes: {n_scenarios}")
+    print("\n  Attack distribution (stratified 80/20):")
+    print("    AP_no (label 1): 34 total → 27 train, 7 test")
+    print("    AP_with (label 2): 10 total → 8 train, 2 test")
+    print("    AE_no (label 3): 8 total → 6 train, 2 test")
+    
     print("\n  ✓ train4 was NEVER seen during training")
     print("  ✓ train4 was NOT used for fitting the scaler")
+    print("  ✓ train3_last70% is ONLY for validation (never trained on)")
     print("  ✓ If RMSE on train4 ≈ RMSE on val → model learned causal relationships")
     print("  ✓ If RMSE on train4 >> RMSE on val → model overfit to train1-3 patterns")
     print("="*70)
@@ -604,14 +695,10 @@ def load_and_prepare_episodic(
         'n_scenarios': n_scenarios,
         'sensor_cols': sensor_cols,
         'scaler': scaler,
+        'ctrl_scalers': ctrl_scalers,
         'input_len': input_len,
         'target_len': target_len,
         'stride': stride,
-        'n_features': len(sensor_cols),
-        'train_files_used': ['train1', 'train2', 'train3'],
-        'test_files_used': ['train4'],
-        'n_attack_segments_train': len(attack_train_segments),
-        'n_attack_segments_test': len(attack_test_segments),
     }
 
 
@@ -627,4 +714,4 @@ if __name__ == "__main__":
     print(f"  Train on: {data['X_train'].shape[0]:,} windows")
     print(f"  Validate on: {data['X_val'].shape[0]:,} windows")
     print(f"  Test on: {data['X_test'].shape[0]:,} windows")
-    print(f"  Scenario classes: {data['n_scenarios']}")
+    print(f"  Scenario classes: {data['n_scenarios']} (0=normal, 1=AP_no, 2=AP_with, 3=AE_no)")
