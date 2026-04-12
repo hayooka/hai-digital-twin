@@ -10,6 +10,7 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
+from typing import Optional
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -272,3 +273,118 @@ def plot_val_predictions(model: "TransformerSeq2Seq", X_val: np.ndarray, Y_val: 
     print(f"  Saved: {out_path}")
 
 
+# ── Transformer Plant (MIMO, autoregressive) ──────────────────────────────────
+
+class TransformerPlant(nn.Module):
+    """
+    MIMO Transformer plant model — identical interface to GRUPlant / LSTMPlant.
+
+    Encoder : attends over [x_cv + scenario_emb] input window → memory
+    Decoder : at each target step cross-attends to memory + causal self-attention
+              over accumulated [x_cv_target, pv_prev] tokens
+
+    Training  (ss_ratio=0, pv_teacher provided) : fully parallel — O(T) not O(T²)
+    Inference (no pv_teacher)                   : autoregressive step-by-step
+    Scheduled sampling (ss_ratio > 0)           : step-by-step with mixed input
+
+    """
+
+    def __init__(self, n_plant_in: int, n_pv: int,
+                 d_model: int = 128, n_heads: int = 8, n_layers: int = 3,
+                 n_scenarios: int = 4, emb_dim: int = 32,
+                 dropout: float = 0.1):
+        super().__init__()
+        self.n_plant_in  = n_plant_in
+        self.n_pv        = n_pv
+        self.d_model     = d_model
+        self.n_scenarios = n_scenarios
+
+        self.scenario_emb = nn.Embedding(n_scenarios, emb_dim)
+        # Encoder projection: x_cv + scenario embedding → d_model
+        self.enc_proj = nn.Linear(n_plant_in + emb_dim, d_model)
+        # Decoder projection: x_cv_target + pv_prev → d_model
+        self.dec_proj = nn.Linear(n_plant_in + n_pv, d_model)
+        self.pos_enc  = PositionalEncoding(d_model, max_len=512, dropout=dropout)
+
+        enc_layer = nn.TransformerEncoderLayer(
+            d_model, n_heads, d_model * 4, dropout,
+            batch_first=True, norm_first=True)
+        dec_layer = nn.TransformerDecoderLayer(
+            d_model, n_heads, d_model * 4, dropout,
+            batch_first=True, norm_first=True)
+        self.encoder = nn.TransformerEncoder(enc_layer, n_layers,
+                                             enable_nested_tensor=False)
+        self.decoder = nn.TransformerDecoder(dec_layer, n_layers)
+
+        self.fc = nn.Sequential(
+            nn.Linear(d_model, 128),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(128, n_pv),
+        )
+
+    def _encode(self, x_cv: torch.Tensor, scenario: torch.Tensor) -> torch.Tensor:
+        emb = self.scenario_emb(scenario).unsqueeze(1).expand(-1, x_cv.size(1), -1)
+        h   = self.pos_enc(self.enc_proj(torch.cat([x_cv, emb], dim=-1)))
+        return self.encoder(h)                              # (B, input_len, d_model)
+
+    def forward(self, x_cv: torch.Tensor, x_cv_target: torch.Tensor,
+                pv_init: torch.Tensor, scenario: torch.Tensor,
+                pv_teacher: Optional[torch.Tensor] = None,
+                ss_ratio: float = 0.0) -> torch.Tensor:
+        """
+        x_cv:        (B, input_len,  n_plant_in)
+        x_cv_target: (B, target_len, n_plant_in)
+        pv_init:     (B, n_pv)
+        scenario:    (B,) int  0–3
+        pv_teacher:  (B, target_len, n_pv)  optional
+        ss_ratio:    scheduled sampling ratio
+        → (B, target_len, n_pv)
+        """
+        B, T_target, _ = x_cv_target.shape
+        memory = self._encode(x_cv, scenario)               # (B, enc_len, d_model)
+
+        # ── Teacher-forcing: fully parallel ──────────────────────────────────
+        if ss_ratio == 0.0 and pv_teacher is not None:
+            pv_in  = torch.cat([pv_init.unsqueeze(1), pv_teacher[:, :-1, :]], dim=1)
+            dec_in = self.pos_enc(self.dec_proj(
+                torch.cat([x_cv_target, pv_in], dim=-1)))   # (B, T, d_model)
+            mask   = nn.Transformer.generate_square_subsequent_mask(
+                T_target, device=x_cv.device)
+            out = self.decoder(dec_in, memory, tgt_mask=mask, tgt_is_causal=True)
+            return self.fc(out)                             # (B, T, n_pv)
+
+        # ── Autoregressive / scheduled sampling ──────────────────────────────
+        pv = pv_init
+        dec_tokens: list[torch.Tensor] = []
+        outputs:    list[torch.Tensor] = []
+
+        for t in range(T_target):
+            token = self.dec_proj(
+                torch.cat([x_cv_target[:, t, :], pv], dim=-1).unsqueeze(1))
+            dec_tokens.append(token)
+            dec_seq = self.pos_enc(torch.cat(dec_tokens, dim=1))
+            T_cur   = dec_seq.size(1)
+            mask    = nn.Transformer.generate_square_subsequent_mask(
+                T_cur, device=x_cv.device)
+            out     = self.decoder(dec_seq, memory, tgt_mask=mask, tgt_is_causal=True)
+            pv_pred = self.fc(out[:, -1, :])               # (B, n_pv)
+            outputs.append(pv_pred)
+
+            if pv_teacher is not None and ss_ratio > 0.0:
+                use_pred = (torch.rand(B, device=x_cv.device) < ss_ratio
+                            ).float().unsqueeze(-1)
+                pv = use_pred * pv_pred + (1 - use_pred) * pv_teacher[:, t, :]
+            elif pv_teacher is not None:
+                pv = pv_teacher[:, t, :]
+            else:
+                pv = pv_pred
+
+        return torch.stack(outputs, dim=1)                  # (B, target_len, n_pv)
+
+    @torch.no_grad()
+    def predict(self, x_cv: torch.Tensor, x_cv_target: torch.Tensor,
+                pv_init: torch.Tensor, scenario: torch.Tensor) -> torch.Tensor:
+        """Full autoregressive rollout (no teacher forcing)."""
+        self.eval()
+        return self.forward(x_cv, x_cv_target, pv_init, scenario)

@@ -43,31 +43,23 @@
       "lag_method": "constant_fallback"
     },
     {
-      "parent": "P1_LCV01D",
-      "lag": 5,
-      "level": 1,
-      "dynamics": 1,
-      "via": "phy_boiler",
-      "lag_method": "tdmi"
-    },
-    {
       "parent": "P1_PP01BD",
       "lag": 3,
       "level": 2,
       "dynamics": 1,
       "via": "phy_boiler:HEX01T",
       "lag_method": "constant_fallback"
+    },
+    {
+      "parent": "P1_LCV01D",
+      "lag": 5,
+      "level": 1,
+      "dynamics": 1,
+      "via": "phy_boiler",
+      "lag_method": "tdmi"
     }
   ],
   "P1_LCV01D": [
-    {
-      "parent": "P1_LIT01",
-      "lag": 1,
-      "level": 0,
-      "dynamics": 1,
-      "via": "dcs_1002h",
-      "lag_method": "tdmi"
-    },
     {
       "parent": "P1_FT03",
       "lag": 1,
@@ -85,11 +77,11 @@
       "lag_method": "constant_fallback"
     },
     {
-      "parent": "P1_PCV01D",
-      "lag": 2,
-      "level": 1,
+      "parent": "P1_LIT01",
+      "lag": 1,
+      "level": 0,
       "dynamics": 1,
-      "via": "phy_boiler",
+      "via": "dcs_1002h",
       "lag_method": "tdmi"
     },
     {
@@ -98,6 +90,14 @@
       "level": 2,
       "dynamics": 1,
       "via": "phy_boiler:TK03",
+      "lag_method": "tdmi"
+    },
+    {
+      "parent": "P1_PCV01D",
+      "lag": 2,
+      "level": 1,
+      "dynamics": 1,
+      "via": "phy_boiler",
       "lag_method": "tdmi"
     }
   ],
@@ -137,20 +137,20 @@
       "lag_method": "tdmi"
     },
     {
-      "parent": "P1_TIT01",
-      "lag": 1,
-      "level": 0,
-      "dynamics": 1,
-      "via": "dcs_1003h",
-      "lag_method": "xcorr_fallback"
-    },
-    {
       "parent": "P1_PP01AD",
       "lag": 3,
       "level": 0,
       "dynamics": 1,
       "via": "dcs_1003h",
       "lag_method": "constant_fallback"
+    },
+    {
+      "parent": "P1_TIT01",
+      "lag": 1,
+      "level": 0,
+      "dynamics": 1,
+      "via": "dcs_1003h",
+      "lag_method": "xcorr_fallback"
     },
     {
       "parent": "P1_PP02D",
@@ -171,20 +171,20 @@
       "lag_method": "tdmi"
     },
     {
-      "parent": "P1_TIT01",
-      "lag": 5,
-      "level": 0,
-      "dynamics": 1,
-      "via": "dcs_1003h",
-      "lag_method": "tdmi"
-    },
-    {
       "parent": "P1_PP01AD",
       "lag": 3,
       "level": 0,
       "dynamics": 1,
       "via": "dcs_1003h",
       "lag_method": "constant_fallback"
+    },
+    {
+      "parent": "P1_TIT01",
+      "lag": 5,
+      "level": 0,
+      "dynamics": 1,
+      "via": "dcs_1003h",
+      "lag_method": "tdmi"
     },
     {
       "parent": "P1_PP02D",
@@ -195,15 +195,7 @@
       "lag_method": "constant_fallback"
     }
   ],
-  "P1_PP01AD": [
-    {
-      "parent": "P1_PP01BD",
-      "lag": 3,
-      "level": 0,
-      "dynamics": 1,
-      "via": "dcs_1004h",
-      "lag_method": "constant_fallback"
-    },
+  "P4_HT_PO": [
     {
       "parent": "P1_SOL01D",
       "lag": 3,
@@ -221,23 +213,57 @@
       "lag_method": "constant_fallback"
     },
     {
-      "parent": "P1_SOL03D",
-      "lag": 3,
-      "level": 2,
+      "parent": "P1_TIT02",
+      "lag": 1,
+      "level": 0,
       "dynamics": 1,
-      "via": "phy_boiler:TK01",
+      "via": "dcs_1004h",
+      "lag_method": "xcorr_fallback"
+    }
+  ],
+  "P1_PP01AD": [
+    {
+      "parent": "P1_SOL01D",
+      "lag": 3,
+      "level": 0,
+      "dynamics": 1,
+      "via": "dcs_1004h",
       "lag_method": "constant_fallback"
     },
     {
-      "parent": "P1_PCV02D",
+      "parent": "P1_PP01BD",
       "lag": 3,
-      "level": 2,
+      "level": 0,
       "dynamics": 1,
-      "via": "phy_boiler:TK01",
+      "via": "dcs_1004h",
+      "lag_method": "constant_fallback"
+    },
+    {
+      "parent": "P1_PP02D",
+      "lag": 3,
+      "level": 0,
+      "dynamics": 1,
+      "via": "dcs_1004h",
       "lag_method": "constant_fallback"
     },
     {
       "parent": "P1_PP04D",
+      "lag": 3,
+      "level": 2,
+      "dynamics": 1,
+      "via": "phy_boiler:TK01",
+      "lag_method": "constant_fallback"
+    },
+    {
+      "parent": "P1_FCV03D",
+      "lag": 3,
+      "level": 2,
+      "dynamics": 1,
+      "via": "phy_boiler:TK01",
+      "lag_method": "constant_fallback"
+    },
+    {
+      "parent": "P1_SOL03D",
       "lag": 3,
       "level": 2,
       "dynamics": 1,
@@ -253,7 +279,57 @@
       "lag_method": "constant_fallback"
     },
     {
+      "parent": "P1_PCV02D",
+      "lag": 3,
+      "level": 2,
+      "dynamics": 1,
+      "via": "phy_boiler:TK01",
+      "lag_method": "constant_fallback"
+    }
+  ],
+  "P1_PP01BD": [
+    {
+      "parent": "P1_SOL01D",
+      "lag": 3,
+      "level": 0,
+      "dynamics": 1,
+      "via": "dcs_1004h",
+      "lag_method": "constant_fallback"
+    },
+    {
+      "parent": "P1_PP04D",
+      "lag": 3,
+      "level": 2,
+      "dynamics": 1,
+      "via": "phy_boiler:TK01",
+      "lag_method": "constant_fallback"
+    },
+    {
       "parent": "P1_FCV03D",
+      "lag": 3,
+      "level": 2,
+      "dynamics": 1,
+      "via": "phy_boiler:TK01",
+      "lag_method": "constant_fallback"
+    },
+    {
+      "parent": "P1_SOL03D",
+      "lag": 3,
+      "level": 2,
+      "dynamics": 1,
+      "via": "phy_boiler:TK01",
+      "lag_method": "constant_fallback"
+    },
+    {
+      "parent": "P1_PCV01D",
+      "lag": 3,
+      "level": 2,
+      "dynamics": 1,
+      "via": "phy_boiler:HEX01T",
+      "lag_method": "constant_fallback"
+    },
+    {
+      "parent": "P1_PCV02D",
       "lag": 3,
       "level": 2,
       "dynamics": 1,
@@ -271,6 +347,14 @@
       "lag_method": "constant_fallback"
     },
     {
+      "parent": "P1_FCV02D",
+      "lag": 3,
+      "level": 2,
+      "dynamics": 1,
+      "via": "phy_boiler:TK02",
+      "lag_method": "constant_fallback"
+    },
+    {
       "parent": "P1_FCV01D",
       "lag": 3,
       "level": 1,
@@ -285,39 +369,23 @@
       "dynamics": 3,
       "via": "phy_boiler:TK02",
       "lag_method": "constant_fallback"
-    },
-    {
-      "parent": "P1_FCV02D",
-      "lag": 3,
-      "level": 2,
-      "dynamics": 1,
-      "via": "phy_boiler:TK02",
-      "lag_method": "constant_fallback"
     }
   ],
-  "P1_PP01BD": [
+  "P1_SOL03D": [
     {
       "parent": "P1_SOL01D",
       "lag": 3,
       "level": 0,
       "dynamics": 1,
-      "via": "dcs_1004h",
+      "via": "dcs_1010h",
       "lag_method": "constant_fallback"
     },
     {
-      "parent": "P1_SOL03D",
+      "parent": "P1_PIT01_HH",
       "lag": 3,
-      "level": 2,
+      "level": 0,
       "dynamics": 1,
-      "via": "phy_boiler:TK01",
-      "lag_method": "constant_fallback"
-    },
-    {
-      "parent": "P1_PCV02D",
-      "lag": 3,
-      "level": 2,
-      "dynamics": 1,
-      "via": "phy_boiler:TK01",
+      "via": "dcs_1010h",
       "lag_method": "constant_fallback"
     },
     {
@@ -329,67 +397,7 @@
       "lag_method": "constant_fallback"
     },
     {
-      "parent": "P1_PCV01D",
-      "lag": 3,
-      "level": 2,
-      "dynamics": 1,
-      "via": "phy_boiler:HEX01T",
-      "lag_method": "constant_fallback"
-    },
-    {
       "parent": "P1_FCV03D",
-      "lag": 3,
-      "level": 2,
-      "dynamics": 1,
-      "via": "phy_boiler:TK01",
-      "lag_method": "constant_fallback"
-    }
-  ],
-  "P4_HT_PO": [
-    {
-      "parent": "P1_SOL01D",
-      "lag": 3,
-      "level": 0,
-      "dynamics": 1,
-      "via": "dcs_1004h",
-      "lag_method": "constant_fallback"
-    },
-    {
-      "parent": "P1_TIT02",
-      "lag": 1,
-      "level": 0,
-      "dynamics": 1,
-      "via": "dcs_1004h",
-      "lag_method": "xcorr_fallback"
-    },
-    {
-      "parent": "P1_PP02D",
-      "lag": 3,
-      "level": 0,
-      "dynamics": 1,
-      "via": "dcs_1004h",
-      "lag_method": "constant_fallback"
-    }
-  ],
-  "P1_SOL03D": [
-    {
-      "parent": "P1_PIT01_HH",
-      "lag": 3,
-      "level": 0,
-      "dynamics": 1,
-      "via": "dcs_1010h",
-      "lag_method": "constant_fallback"
-    },
-    {
-      "parent": "P1_SOL01D",
-      "lag": 3,
-      "level": 0,
-      "dynamics": 1,
-      "via": "dcs_1010h",
-      "lag_method": "constant_fallback"
-    },
-    {
-      "parent": "P1_PCV02D",
       "lag": 3,
       "level": 2,
       "dynamics": 1,
@@ -405,15 +413,7 @@
       "lag_method": "constant_fallback"
     },
     {
-      "parent": "P1_PP04D",
-      "lag": 3,
-      "level": 2,
-      "dynamics": 1,
-      "via": "phy_boiler:TK01",
-      "lag_method": "constant_fallback"
-    },
-    {
-      "parent": "P1_FCV03D",
+      "parent": "P1_PCV02D",
       "lag": 3,
       "level": 2,
       "dynamics": 1,
@@ -431,7 +431,7 @@
       "lag_method": "constant_fallback"
     },
     {
-      "parent": "P1_SOL03D",
+      "parent": "P1_PP04D",
       "lag": 10,
       "level": 2,
       "dynamics": 2,
@@ -439,7 +439,15 @@
       "lag_method": "constant_fallback"
     },
     {
-      "parent": "P1_PCV02D",
+      "parent": "P1_FCV03D",
+      "lag": 10,
+      "level": 2,
+      "dynamics": 2,
+      "via": "phy_boiler:TK01",
+      "lag_method": "constant_fallback"
+    },
+    {
+      "parent": "P1_SOL03D",
       "lag": 10,
       "level": 2,
       "dynamics": 2,
@@ -455,15 +463,7 @@
       "lag_method": "constant_fallback"
     },
     {
-      "parent": "P1_PP04D",
-      "lag": 10,
-      "level": 2,
-      "dynamics": 2,
-      "via": "phy_boiler:TK01",
-      "lag_method": "constant_fallback"
-    },
-    {
-      "parent": "P1_FCV03D",
+      "parent": "P1_PCV02D",
       "lag": 10,
       "level": 2,
       "dynamics": 2,
@@ -481,7 +481,23 @@
       "lag_method": "xcorr_fallback"
     },
     {
+      "parent": "P1_FCV03D",
+      "lag": 2,
+      "level": 2,
+      "dynamics": 1,
+      "via": "phy_boiler:TK01",
+      "lag_method": "tdmi"
+    },
+    {
       "parent": "P1_SOL03D",
+      "lag": 3,
+      "level": 2,
+      "dynamics": 1,
+      "via": "phy_boiler:TK01",
+      "lag_method": "constant_fallback"
+    },
+    {
+      "parent": "P1_PP01BD",
       "lag": 3,
       "level": 2,
       "dynamics": 1,
@@ -495,127 +511,17 @@
       "dynamics": 1,
       "via": "phy_boiler:TK01",
       "lag_method": "xcorr_fallback"
-    },
-    {
-      "parent": "P1_PP01BD",
-      "lag": 3,
-      "level": 2,
-      "dynamics": 1,
-      "via": "phy_boiler:TK01",
-      "lag_method": "constant_fallback"
-    },
-    {
-      "parent": "P1_FCV03D",
-      "lag": 2,
-      "level": 2,
-      "dynamics": 1,
-      "via": "phy_boiler:TK01",
-      "lag_method": "tdmi"
-    }
-  ],
-  "P1_LIT01": [
-    {
-      "parent": "P1_LCV01D",
-      "lag": 11,
-      "level": 2,
-      "dynamics": 2,
-      "via": "phy_boiler:TK03",
-      "lag_method": "tdmi"
-    },
-    {
-      "parent": "P1_FCV03D",
-      "lag": 6,
-      "level": 2,
-      "dynamics": 2,
-      "via": "phy_boiler:TK03",
-      "lag_method": "tdmi"
-    }
-  ],
-  "P1_PIT01_HH": [
-    {
-      "parent": "P1_SOL03D",
-      "lag": 10,
-      "level": 2,
-      "dynamics": 2,
-      "via": "phy_boiler:TK01",
-      "lag_method": "constant_fallback"
-    },
-    {
-      "parent": "P1_PCV02D",
-      "lag": 10,
-      "level": 2,
-      "dynamics": 2,
-      "via": "phy_boiler:TK01",
-      "lag_method": "constant_fallback"
-    },
-    {
-      "parent": "P1_PP01BD",
-      "lag": 10,
-      "level": 2,
-      "dynamics": 2,
-      "via": "phy_boiler:TK01",
-      "lag_method": "constant_fallback"
-    },
-    {
-      "parent": "P1_PP04D",
-      "lag": 10,
-      "level": 2,
-      "dynamics": 2,
-      "via": "phy_boiler:TK01",
-      "lag_method": "constant_fallback"
-    },
-    {
-      "parent": "P1_FCV03D",
-      "lag": 10,
-      "level": 2,
-      "dynamics": 2,
-      "via": "phy_boiler:TK01",
-      "lag_method": "constant_fallback"
-    }
-  ],
-  "P1_TIT03": [
-    {
-      "parent": "P1_SOL03D",
-      "lag": 22,
-      "level": 2,
-      "dynamics": 3,
-      "via": "phy_boiler:TK01",
-      "lag_method": "constant_fallback"
-    },
-    {
-      "parent": "P1_PCV02D",
-      "lag": 15,
-      "level": 2,
-      "dynamics": 3,
-      "via": "phy_boiler:TK01",
-      "lag_method": "xcorr_fallback"
-    },
-    {
-      "parent": "P1_PP01BD",
-      "lag": 22,
-      "level": 2,
-      "dynamics": 3,
-      "via": "phy_boiler:TK01",
-      "lag_method": "constant_fallback"
-    },
-    {
-      "parent": "P1_PP04D",
-      "lag": 26,
-      "level": 2,
-      "dynamics": 3,
-      "via": "phy_boiler:TK01",
-      "lag_method": "tdmi"
-    },
-    {
-      "parent": "P1_FCV03D",
-      "lag": 25,
-      "level": 2,
-      "dynamics": 3,
-      "via": "phy_boiler:TK01",
-      "lag_method": "tdmi"
     }
   ],
   "P1_TIT02": [
+    {
+      "parent": "P1_FCV02D",
+      "lag": 15,
+      "level": 2,
+      "dynamics": 3,
+      "via": "phy_boiler:TK02",
+      "lag_method": "xcorr_fallback"
+    },
     {
       "parent": "P1_PP02D",
       "lag": 22,
@@ -631,25 +537,121 @@
       "dynamics": 3,
       "via": "phy_boiler:TK02",
       "lag_method": "xcorr_fallback"
-    },
-    {
-      "parent": "P1_FCV02D",
-      "lag": 15,
-      "level": 2,
-      "dynamics": 3,
-      "via": "phy_boiler:TK02",
-      "lag_method": "xcorr_fallback"
     }
   ],
-  "P1_TIT01": [
+  "P1_PIT01_HH": [
+    {
+      "parent": "P1_PP04D",
+      "lag": 10,
+      "level": 2,
+      "dynamics": 2,
+      "via": "phy_boiler:TK01",
+      "lag_method": "constant_fallback"
+    },
+    {
+      "parent": "P1_FCV03D",
+      "lag": 10,
+      "level": 2,
+      "dynamics": 2,
+      "via": "phy_boiler:TK01",
+      "lag_method": "constant_fallback"
+    },
+    {
+      "parent": "P1_SOL03D",
+      "lag": 10,
+      "level": 2,
+      "dynamics": 2,
+      "via": "phy_boiler:TK01",
+      "lag_method": "constant_fallback"
+    },
+    {
+      "parent": "P1_PP01BD",
+      "lag": 10,
+      "level": 2,
+      "dynamics": 2,
+      "via": "phy_boiler:TK01",
+      "lag_method": "constant_fallback"
+    },
+    {
+      "parent": "P1_PCV02D",
+      "lag": 10,
+      "level": 2,
+      "dynamics": 2,
+      "via": "phy_boiler:TK01",
+      "lag_method": "constant_fallback"
+    }
+  ],
+  "P1_TIT03": [
+    {
+      "parent": "P1_PP04D",
+      "lag": 26,
+      "level": 2,
+      "dynamics": 3,
+      "via": "phy_boiler:TK01",
+      "lag_method": "tdmi"
+    },
+    {
+      "parent": "P1_FCV03D",
+      "lag": 25,
+      "level": 2,
+      "dynamics": 3,
+      "via": "phy_boiler:TK01",
+      "lag_method": "tdmi"
+    },
+    {
+      "parent": "P1_SOL03D",
+      "lag": 22,
+      "level": 2,
+      "dynamics": 3,
+      "via": "phy_boiler:TK01",
+      "lag_method": "constant_fallback"
+    },
     {
       "parent": "P1_PP01BD",
       "lag": 22,
       "level": 2,
       "dynamics": 3,
-      "via": "phy_boiler:HEX01T",
+      "via": "phy_boiler:TK01",
       "lag_method": "constant_fallback"
     },
+    {
+      "parent": "P1_PCV02D",
+      "lag": 15,
+      "level": 2,
+      "dynamics": 3,
+      "via": "phy_boiler:TK01",
+      "lag_method": "xcorr_fallback"
+    }
+  ],
+  "P1_LIT01": [
+    {
+      "parent": "P1_FCV03D",
+      "lag": 6,
+      "level": 2,
+      "dynamics": 2,
+      "via": "phy_boiler:TK03",
+      "lag_method": "tdmi"
+    },
+    {
+      "parent": "P1_LCV01D",
+      "lag": 11,
+      "level": 2,
+      "dynamics": 2,
+      "via": "phy_boiler:TK03",
+      "lag_method": "tdmi"
+    }
+  ],
+  "P1_FT03": [
+    {
+      "parent": "P1_FCV03D",
+      "lag": 5,
+      "level": 1,
+      "dynamics": 2,
+      "via": "phy_boiler",
+      "lag_method": "tdmi"
+    }
+  ],
+  "P1_TIT01": [
     {
       "parent": "P1_PCV01D",
       "lag": 22,
@@ -657,6 +659,14 @@
       "dynamics": 3,
       "via": "phy_boiler:HEX01T",
       "lag_method": "tdmi"
+    },
+    {
+      "parent": "P1_PP01BD",
+      "lag": 22,
+      "level": 2,
+      "dynamics": 3,
+      "via": "phy_boiler:HEX01T",
+      "lag_method": "constant_fallback"
     }
   ],
   "P1_PIT01": [
@@ -693,16 +703,6 @@
     {
       "parent": "P1_FCV01D",
       "lag": 7,
-      "level": 1,
-      "dynamics": 2,
-      "via": "phy_boiler",
-      "lag_method": "tdmi"
-    }
-  ],
-  "P1_FT03": [
-    {
-      "parent": "P1_FCV03D",
-      "lag": 5,
       "level": 1,
       "dynamics": 2,
       "via": "phy_boiler",

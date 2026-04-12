@@ -1,0 +1,31 @@
+data:
+  input_len: 300
+  target_len: 180
+  stride: 60
+  train_ratio: 0.80
+  attack_split_ratio: 0.80
+  before_attack_sec: 300
+  after_attack_sec: 180
+  random_seed: 42
+
+model:
+  d_model: 256
+  n_heads: 8
+  n_layers: 4
+  ffn_dim: 1024
+  dropout: 0.1
+  n_scenarios: 4
+
+training:
+  epochs: 50
+  batch_size: 64
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
+  grad_clip: 1.0
+  scheduler_patience: 5
+  scheduler_factor: 0.5
+  lambda_causal: 0.1
+
+evaluation:
+  causal_threshold: 0.1
+  batch_size: 64

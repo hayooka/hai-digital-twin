@@ -30,6 +30,12 @@ git push origin your-feature-name
 - `twin/` → Digital Twin pipeline and logic
 - `data/` → Dataset (not uploaded to GitHub)
 - `evaluate.py` → Final evaluation
+- `outputs/` → Saved models, metrics, and plots
+  - `outputs/lstm/` → LSTM results (causal + no_causal)
+  - `outputs/transformer/` → Transformer results (causal + no_causal)
+  - `outputs/causal_graph/` → Causal graph edges, parents, summary
+  - `outputs/scaled_split/` → Preprocessed train/val/test splits
+  - `outputs/RESULTS.md` → Full results summary
 
 ---
 
@@ -65,13 +71,17 @@ git push origin your-feature-name
 
 ## 📊 Results
 
-| Metric | Value |
-|--------|-------|
-| RMSE normal | 0.097 |
-| RMSE known attacks | 6.635 |
-| Attack/Normal ratio | 68x |
-| RMSE novel attacks | 4.028 |
-| Generalization Gap | 2.607 |
-| Acceptance rate | 100% |
-| ISO Forest F1 | 0.346 |
-| ISO Forest ROC-AUC | 0.659 |
+> Full results and analysis: [outputs/RESULTS.md](outputs/RESULTS.md)
+
+### Model Comparison
+
+| Model | Variant | RMSE Val | RMSE Normal | RMSE Attack | Separation Ratio | Causal Violation % |
+|-------|---------|----------|-------------|-------------|-----------------|-------------------|
+| LSTM | No Causal | 0.172 | 0.200 | 0.804 | 4.02 | 96.3% |
+| LSTM | Causal | 0.260 | 0.284 | 1.214 | **4.28** | **13.1%** |
+| Transformer | No Causal | **0.137** | **0.145** | 0.307 | 2.12 | 96.6% |
+| Transformer | Causal | 0.238 | 0.251 | 0.923 | 3.68 | **13.0%** |
+
+- **Causal constraints** reduce causal violations from ~96% → ~13% for both architectures
+- **LSTM + Causal** achieves the best attack/normal separation ratio (4.28×)
+- **Transformer + No Causal** achieves the lowest reconstruction error on normal data

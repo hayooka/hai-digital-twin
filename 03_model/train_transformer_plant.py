@@ -1,23 +1,25 @@
 """
-train_lstm.py — Train the complete HAI Digital Twin (LSTM plant variant).
+train_transformer_plant.py — Train the complete HAI Digital Twin (Transformer plant variant).
 
 Per-epoch training order:
     1. Controllers (PC, LC, FC, TC) — GRUController × 4, MSE loss on CV sequence
     2. CC Classifier-Regressor       — BCE (pump on/off) + MSE (speed) combined loss
-    3. LSTMPlant                     — scheduled-sampling MSE on PV
+    3. TransformerPlant              — scheduled-sampling MSE on PV
+                                       (teacher-forcing path is fully parallel;
+                                        autoregressive / scheduled-sampling path is step-by-step)
 
 Validation (per epoch):
-    Open-loop, ss_ratio=0 for all models.
+    Open-loop, ss_ratio=0 (fully parallel teacher-forced pass) for all models.
 
 Post-training:
     Closed-loop rollout over val windows (target_len horizon):
         1. Run each GRUController on input window  →  predicted CV sequence
         2. Patch x_cv_target with predicted CVs
-        3. Run LSTMPlant autoregressively          →  PV sequence
+        3. Run TransformerPlant autoregressively    →  PV sequence
     Compute NRMSE per PV channel.
 
 Run:
-    python 03_model/train_lstm.py
+    python 03_model/train_transformer_plant.py
 """
 
 import sys
@@ -32,15 +34,17 @@ sys.path.insert(0, str(ROOT / "02_data_pipeline"))
 sys.path.insert(0, str(ROOT / "03_model"))
 
 from pipeline import load_and_prepare_data
-from lstm import LSTMPlant
+from transformer import TransformerPlant
 from gru import GRUController, CCClassifierRegressor
 from config import LOOPS, PV_COLS
 
 # ── Config ────────────────────────────────────────────────────────────────────
 SEED        = 42
-# Plant
-HIDDEN      = 256
-LAYERS      = 2
+# Transformer plant
+D_MODEL     = 128
+N_HEADS     = 8
+N_LAYERS    = 3
+EMB_DIM     = 32
 DROPOUT     = 0.1
 # Controller
 CTRL_HIDDEN = 64
@@ -49,8 +53,8 @@ CTRL_LAYERS = 2
 CC_HIDDEN   = 32
 # Training
 EPOCHS      = 150
-BATCH       = 128
-LR          = 1e-3
+BATCH       = 64    # smaller than GRU/LSTM — Transformer uses more memory
+LR          = 3e-4  # lower LR common for Transformers
 CTRL_LR     = 1e-3
 WD          = 1e-5
 GRAD_CLIP   = 1.0
@@ -61,7 +65,7 @@ SS_START    = 10
 SS_END      = 100
 SS_MAX      = 0.5
 
-OUT_DIR = Path("outputs/lstm_plant")
+OUT_DIR = Path("outputs/transformer_plant")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 random.seed(SEED); np.random.seed(SEED)
@@ -106,25 +110,28 @@ print(f"  Train       : {X_train.shape}   Val: {X_val.shape}")
 pv_set      = set(PV_COLS)
 non_pv_cols = [c for c in sensor_cols if c not in pv_set]
 col_to_idx  = {c: i for i, c in enumerate(non_pv_cols)}
-pv_col_to_pv_idx = {c: i for i, c in enumerate(PV_COLS)}
 
 CTRL_LOOPS = ['PC', 'LC', 'FC', 'TC']
-# Index of each loop's CV column within x_cv / x_cv_target
 ctrl_cv_col_idx = {ln: col_to_idx[LOOPS[ln].cv]
                    for ln in CTRL_LOOPS if LOOPS[ln].cv in col_to_idx}
 
 # ── 2. Build models ───────────────────────────────────────────────────────────
 print(f"\nStep 2: Building models... (device: {device})")
 
-plant_model = LSTMPlant(
-    n_plant_in=N_PLANT_IN, n_pv=N_PV,
-    hidden=HIDDEN, layers=LAYERS,
-    n_scenarios=N_SCENARIOS, dropout=DROPOUT,
+plant_model = TransformerPlant(
+    n_plant_in  = N_PLANT_IN,
+    n_pv        = N_PV,
+    d_model     = D_MODEL,
+    n_heads     = N_HEADS,
+    n_layers    = N_LAYERS,
+    n_scenarios = N_SCENARIOS,
+    emb_dim     = EMB_DIM,
+    dropout     = DROPOUT,
 ).to(device)
 
 ctrl_models = {
     ln: GRUController(
-        n_inputs    = ctrl_data[ln]['X_train'].shape[-1],  # 2 = [SP, PV]
+        n_inputs    = ctrl_data[ln]['X_train'].shape[-1],
         hidden      = CTRL_HIDDEN,
         layers      = CTRL_LAYERS,
         dropout     = DROPOUT,
@@ -137,9 +144,9 @@ cc_model = CCClassifierRegressor(
     n_inputs=2, hidden=CC_HIDDEN, dropout=DROPOUT
 ).to(device)
 
-print(f"  LSTMPlant   : {sum(p.numel() for p in plant_model.parameters()):,}")
-print(f"  Controllers : {sum(p.numel() for m in ctrl_models.values() for p in m.parameters()):,}")
-print(f"  CC model    : {sum(p.numel() for p in cc_model.parameters()):,}")
+print(f"  TransformerPlant : {sum(p.numel() for p in plant_model.parameters()):,}")
+print(f"  Controllers      : {sum(p.numel() for m in ctrl_models.values() for p in m.parameters()):,}")
+print(f"  CC model         : {sum(p.numel() for p in cc_model.parameters()):,}")
 
 # ── 3. Optimizers & losses ────────────────────────────────────────────────────
 plant_opt = torch.optim.Adam(plant_model.parameters(), lr=LR, weight_decay=WD)
@@ -200,25 +207,23 @@ def train_cc() -> float:
     """
     One pass over CC training data.
     Loss = BCE(pump on/off) + MSE(pump speed, on-samples only).
-    Input:  last timestep of [SP, PV] window → (B, 2)
-    Labels: first target-step CV value (pump speed; 0 = off)
     """
     cc_model.train()
-    X_cc  = ctrl_data['CC']['X_train']   # (N, input_len, 2)
-    y_cc  = ctrl_data['CC']['y_train']   # (N, target_len, 1)
+    X_cc  = ctrl_data['CC']['X_train']
+    y_cc  = ctrl_data['CC']['y_train']
     N_cc  = len(X_cc)
     idx   = np.random.permutation(N_cc)
     total = 0.0
 
     for i in range(0, N_cc, BATCH):
         b         = idx[i:i + BATCH]
-        x_in      = torch.tensor(X_cc[b]).float().to(device)         # (B, input_len, 2)
-        cv_target = torch.tensor(y_cc[b, 0, 0]).float().to(device)   # first target step (B,)
+        x_in      = torch.tensor(X_cc[b]).float().to(device)
+        cv_target = torch.tensor(y_cc[b, 0, 0]).float().to(device)
 
-        pump_on_lbl = (cv_target > 0.0).float().unsqueeze(-1)        # (B, 1)
-        pump_speed  = cv_target.unsqueeze(-1)                        # (B, 1)
+        pump_on_lbl = (cv_target > 0.0).float().unsqueeze(-1)
+        pump_speed  = cv_target.unsqueeze(-1)
 
-        logit, speed = cc_model(x_in)                                # each (B, 1)
+        logit, speed = cc_model(x_in)
         loss_cls = bce(logit, pump_on_lbl)
         on_mask  = pump_on_lbl.squeeze(-1).bool()
         loss_reg = (mse(speed[on_mask], pump_speed[on_mask])
@@ -266,6 +271,8 @@ for epoch in range(1, EPOCHS + 1):
     cc_train = train_cc()
 
     # ── c) Plant ────────────────────────────────────────────────────────────
+    # ss_ratio=0 with pv_teacher → fully parallel teacher-forcing (fast O(T) pass)
+    # ss_ratio>0 → step-by-step scheduled sampling
     plant_model.train()
     idx         = np.random.permutation(N)
     plant_total = 0.0
@@ -287,7 +294,7 @@ for epoch in range(1, EPOCHS + 1):
         plant_opt.step()
         plant_total += loss.item()
 
-    # ── d) Validation (open-loop, ss_ratio=0) ───────────────────────────────
+    # ── d) Validation (open-loop / fully parallel teacher-forced) ───────────
     plant_model.eval()
     ctrl_val   = val_controllers()
     cc_val     = val_cc()
@@ -322,16 +329,7 @@ for epoch in range(1, EPOCHS + 1):
 plant_model.load_state_dict(best_plant_state)
 print(f"\n  Best plant val loss: {best_plant_val:.5f}")
 
-# ── 5. Closed-loop validation (target_len-step horizon) ───────────────────────
-# Strategy:
-#   1. Run each GRUController on its val input window → predicted CV sequence
-#   2. Patch x_cv_target with predicted CVs (replacing true CVs)
-#   3. Run LSTMPlant autoregressively → predicted PV sequence
-#   4. Compute NRMSE vs true PV target
-#
-# Note: this is a one-shot controller rollout (not step-by-step PV feedback).
-# Full step-by-step closed-loop (with PV feedback to controllers each step)
-# is implemented in the separate inference script.
+# ── 5. Closed-loop validation ─────────────────────────────────────────────────
 print(f"\nStep 4: Closed-loop validation ({TARGET_LEN}-step / ~{TARGET_LEN//60}-min horizon)...")
 for m in ctrl_models.values(): m.eval()
 cc_model.eval()
@@ -342,28 +340,26 @@ pv_preds = np.zeros((N_val, TARGET_LEN, N_PV), dtype=np.float32)
 
 with torch.no_grad():
     for i in range(0, N_val, BATCH):
-        sl       = slice(i, i + BATCH)
-        x_cv_b   = torch.tensor(X_val[sl]).float().to(device)
-        xct_b    = torch.tensor(X_cv_tgt_val[sl]).float().to(device).clone()
+        sl        = slice(i, i + BATCH)
+        x_cv_b    = torch.tensor(X_val[sl]).float().to(device)
+        xct_b     = torch.tensor(X_cv_tgt_val[sl]).float().to(device).clone()
         pv_init_b = torch.tensor(pv_init_val[sl]).float().to(device)
-        sc_b     = torch.tensor(scenario_val[sl]).long().to(device)
+        sc_b      = torch.tensor(scenario_val[sl]).long().to(device)
 
-        # Predict CVs from controllers and patch x_cv_target
         for ln in CTRL_LOOPS:
             if ln not in ctrl_cv_col_idx:
                 continue
             Xc      = torch.tensor(ctrl_data[ln]['X_val'][sl]).float().to(device)
-            cv_pred = ctrl_models[ln].predict(Xc, target_len=TARGET_LEN)  # (B, T, 1)
+            cv_pred = ctrl_models[ln].predict(Xc, target_len=TARGET_LEN)
             cv_i    = ctrl_cv_col_idx[ln]
             xct_b[:, :, cv_i:cv_i + 1] = cv_pred
 
-        # Autoregressive plant rollout with patched CV targets
-        pv_seq = plant_model.predict(x_cv_b, xct_b, pv_init_b, sc_b)  # (B, T, n_pv)
+        # Autoregressive rollout (no teacher forcing)
+        pv_seq   = plant_model.predict(x_cv_b, xct_b, pv_init_b, sc_b)
         B_actual = pv_seq.size(0)
         pv_preds[i:i + B_actual] = pv_seq.cpu().numpy()
 
-# NRMSE per PV channel
-pv_true = pv_target_val   # (N_val, target_len, n_pv)
+pv_true = pv_target_val
 nrmse   = []
 for k in range(N_PV):
     true_k = pv_true[:, :, k]
@@ -372,9 +368,8 @@ for k in range(N_PV):
     rng    = max(float(true_k.max() - true_k.min()), 1e-6)
     nrmse.append(rmse / rng)
 
-pv_names = PV_COLS
 print("  Closed-loop NRMSE per PV:")
-for name, v in zip(pv_names, nrmse):
+for name, v in zip(PV_COLS, nrmse):
     print(f"    {name:<30s}: {v:.4f}")
 print(f"  Mean NRMSE: {np.mean(nrmse):.4f}")
 
@@ -386,10 +381,12 @@ torch.save({
     "n_plant_in":  N_PLANT_IN,
     "n_pv":        N_PV,
     "n_scenarios": N_SCENARIOS,
-    "hidden":      HIDDEN,
-    "layers":      LAYERS,
-}, OUT_DIR / "lstm_plant.pt")
-print(f"  Saved: lstm_plant.pt")
+    "d_model":     D_MODEL,
+    "n_heads":     N_HEADS,
+    "n_layers":    N_LAYERS,
+    "emb_dim":     EMB_DIM,
+}, OUT_DIR / "transformer_plant.pt")
+print(f"  Saved: transformer_plant.pt")
 
 for ln, m in ctrl_models.items():
     torch.save({

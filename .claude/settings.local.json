@@ -22,7 +22,9 @@
       "Bash(python3 -c ':*)",
       "Bash(\"/c/Users/ahmma/anaconda3/envs/digital_twin/python.exe\" 04_evaluate/run_eval.py)",
       "Bash(\"/c/Users/ahmma/anaconda3/envs/digital_twin/python.exe\" 01_causal_graph/build_graph_full.py)",
-      "Bash(/c/Users/ahmma/anaconda3/envs/digital_twin/python.exe -c ':*)"
+      "Bash(/c/Users/ahmma/anaconda3/envs/digital_twin/python.exe -c ':*)",
+      "Bash(/c/Users/ahmma/anaconda3/envs/digital_twin/python.exe /tmp/nb_builder.py)",
+      "Bash(/c/Users/ahmma/anaconda3/envs/digital_twin/python.exe \"c:/Users/ahmma/Desktop/farah/hai-digital-twin/01_causal_graph/make_notebook.py\")"
     ]
   }
 }
