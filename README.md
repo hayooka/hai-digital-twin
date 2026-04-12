@@ -1,87 +1,132 @@
-# HAI Digital Twin Project
+# HAI Digital Twin
 
-## 👥 Team Workflow
+A closed-loop digital twin of the HAI 23.05 industrial control system, trained to simulate normal and attack-injected plant behaviour across multiple control loops.
 
-We use GitHub to collaborate on this project.
+---
 
-### 🔁 Daily Workflow
-Before starting work:
-git pull
+## Team Workflow
 
-After finishing work:
+### Daily workflow
+```bash
+git pull                         # before starting
 git add .
 git commit -m "describe your work"
-git push
+git push                         # after finishing
+```
 
-
-### 🌿 Branching (Recommended)
-Each member works on their own branch:
-
+### Branching
+```bash
 git checkout -b your-feature-name
 git push origin your-feature-name
+```
 
-
----
-
-## 📁 Project Structure
-
-- `models/` → All models (LSTM, Transformer, VAE, Diffusion, ISO Forest)
-- `utils/` → Data preprocessing (normalize, windows, graph)
-- `twin/` → Digital Twin pipeline and logic
-- `data/` → Dataset (not uploaded to GitHub)
-- `evaluate.py` → Final evaluation
-- `outputs/` → Saved models, metrics, and plots
-  - `outputs/lstm/` → LSTM results (causal + no_causal)
-  - `outputs/transformer/` → Transformer results (causal + no_causal)
-  - `outputs/causal_graph/` → Causal graph edges, parents, summary
-  - `outputs/scaled_split/` → Preprocessed train/val/test splits
-  - `outputs/RESULTS.md` → Full results summary
+**Rules:** always `git pull` before starting — do not edit other people's files.
 
 ---
 
-## ⚠️ Rules
-- Always `git pull` before starting
-- Do not edit other people's files
-- Keep commits clear and simple
+## Project Structure
+
+```
+hai-digital-twin/
+├── 02_data_pipeline/
+│   ├── config.py              # loop definitions, column names, hyperparams
+│   ├── scaled_split.py        # raw CSV → normalised sliding windows (.npz)
+│   └── pipeline.py            # load windows, split into plant + controller arrays
+│
+├── 03_model/
+│   ├── gru.py                 # GRUPlant, GRUController, CCClassifierRegressor
+│   ├── lstm.py                # LSTMPlant (same interface as GRUPlant)
+│   ├── transformer.py         # TransformerPlant (same interface)
+│   ├── train_gru.py           # train GRU plant + all controllers
+│   ├── train_lstm.py          # train LSTM plant + all controllers
+│   ├── train_transformer.py   # train Transformer plant + all controllers
+│   └── plot_results.py        # shared plotting utilities (loss curves + horizon plots)
+│
+├── outputs/
+│   ├── scaled_split/          # preprocessed windows (already generated)
+│   ├── gru_plant/             # GRU checkpoints + plots
+│   ├── lstm_plant/            # LSTM checkpoints + plots
+│   └── transformer_plant/     # Transformer checkpoints + plots
+│
+└── boiler_twin/               # separate boiler system experiments
+```
 
 ---
 
-## 🧠 Idea
-- Predict future system behavior (Digital Twin)
-- Detect anomalies (ISO Forest)
-- Generate attacks (Diffusion / VAE)
+## Architecture
+
+### Closed-loop system
+
+```
+[SP, PV history]  →  GRUController × 4 (PC, LC, FC, TC)  →  CV sequence
+[TIT03, PP04SP]   →  CCClassifierRegressor                →  pump on/off + speed
+                                        │
+                              Plant model (choice below)
+                                        │
+                    Encoder: non-PV signals + scenario embedding  →  hidden h
+                    Decoder: step-by-step autoregressive rollout
+                             input_t = [ cv_target_t  ‖  pv_{t-1} ]
+                             pv_t   = FC( RNN/Transformer(input_t, h) )
+                                        │
+                                        ▼
+                          5 PV outputs: P1_PIT01, P1_LIT01, P1_FT03Z,
+                                        P1_TIT01, P1_TIT03
+```
+
+### Plant backbones
+
+| Script | Plant model | Config |
+|---|---|---|
+| `train_gru.py` | GRU encoder + GRU decoder | hidden=256, layers=2 |
+| `train_lstm.py` | LSTM encoder + LSTM decoder | hidden=256, layers=2 |
+| `train_transformer.py` | Transformer encoder | d_model=128, heads=8, layers=3 |
+
+Controllers are always `GRUController` regardless of plant backbone.
+
+### Training order per epoch
+
+1. `GRUController × 4` (PC, LC, FC, TC) — MSE on CV sequence
+2. `CCClassifierRegressor` — BCE (pump on/off) + MSE (pump speed)
+3. Plant model — scheduled-sampling MSE on PV
+4. Validation — open-loop (ss_ratio=0), drives LR scheduler
+
+Scheduled sampling ramps from 0 → 0.5 between epochs 10–100.
 
 ---
 
-## 🏗️ Architecture
+## Data
 
-> [View full interactive diagram](docs/architecture.html)
+**HAI 23.05** — 1 Hz industrial control system logs with labelled attack segments.
 
-**3 layers + Guided Generation (main research contribution):**
+| Split | Source |
+|---|---|
+| Train | train1 (100%) + train2 (100%) + train3 (first 30%) |
+| Val | train3 (last 70%) |
+| Test | train4 (fully held out — never seen during training) |
 
-| Layer | Primary | Baseline | Data |
-|-------|---------|----------|------|
-| Physical Model | Transformer Seq2Seq | LSTM | train1-3 normal only |
-| Detector | ISO Forest | LSTM Autoencoder | Transformer errors |
-| Attack Generator | Conditional Diffusion | VAE | test1 attacks only |
-| Guided Generation | Rejection Sampling | — | inference only |
-| Final Evaluation | — | — | test2 blind test |
+Attack types: `AP_no_combination`, `AP_with_combination`, `AE_no_combination`.
+
+Input window: 300 steps (5 min) → Target window: 180 steps (3 min), stride: 60 steps.
 
 ---
 
-## 📊 Results
+## Running
 
-> Full results and analysis: [outputs/RESULTS.md](outputs/RESULTS.md)
+Data preprocessing is already done. Just run the model you want to try:
 
-### Model Comparison
+```bash
+python 03_model/train_gru.py
+python 03_model/train_lstm.py
+python 03_model/train_transformer.py
+```
 
-| Model | Variant | RMSE Val | RMSE Normal | RMSE Attack | Separation Ratio | Causal Violation % |
-|-------|---------|----------|-------------|-------------|-----------------|-------------------|
-| LSTM | No Causal | 0.172 | 0.200 | 0.804 | 4.02 | 96.3% |
-| LSTM | Causal | 0.260 | 0.284 | 1.214 | **4.28** | **13.1%** |
-| Transformer | No Causal | **0.137** | **0.145** | 0.307 | 2.12 | 96.6% |
-| Transformer | Causal | 0.238 | 0.251 | 0.923 | 3.68 | **13.0%** |
+Each run saves to its `outputs/` subdirectory:
 
-- **Causal constraints** reduce causal violations from ~96% → ~13% for both architectures
-- **LSTM + Causal** achieves the best attack/normal separation ratio (4.28×)
-- **Transformer + No Causal** achieves the lowest reconstruction error on normal data
+```
+*_loss_curves.png        # training loss (log scale) + scheduled-sampling ratio
+*_horizon_300s.png       # 5-min closed-loop rollout vs ground truth (5 PVs)
+*_horizon_600s.png       # 10-min
+*_horizon_900s.png       # 15-min
+*_horizon_1800s.png      # 30-min
+*.pt                     # model checkpoints
+```
