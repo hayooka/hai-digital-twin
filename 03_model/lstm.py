@@ -155,6 +155,104 @@ def make_predict_fn(model, batch_size=64):
 
 
 
+# ── LSTM Controller ──────────────────────────────────────────────────────────
+
+class LSTMController(nn.Module):
+    """
+    Per-loop LSTM seq2seq controller. Mirrors GRUController but uses LSTM
+    (hidden state h + cell state c).
+
+    Encoder : [SP, PV] (or [SP, PV, CV_fb]) over input_len steps → (h, c)
+    Decoder : predict CV for target_len steps
+              input at each decoder step = previous CV (teacher-forced or predicted)
+    """
+
+    def __init__(self, n_inputs: int = 2, hidden: int = 64,
+                 layers: int = 2, dropout: float = 0.1, output_len: int = 180):
+        super().__init__()
+        self.output_len = output_len
+        drop = dropout if layers > 1 else 0.0
+
+        self.encoder = nn.LSTM(n_inputs, hidden, layers,
+                               batch_first=True, dropout=drop)
+        self.decoder = nn.LSTM(1, hidden, layers,
+                               batch_first=True, dropout=drop)
+        self.out = nn.Linear(hidden, 1)
+
+    def forward(self, x: torch.Tensor,
+                y_cv_teacher: Optional[torch.Tensor] = None,
+                ss_ratio: float = 0.0) -> torch.Tensor:
+        B = x.size(0)
+        _, (h, c) = self.encoder(x)
+        prev = torch.zeros(B, 1, 1, device=x.device)
+        outputs = []
+
+        for t in range(self.output_len):
+            out, (h, c) = self.decoder(prev, (h, c))
+            cv_pred = self.out(out)
+            outputs.append(cv_pred)
+
+            if y_cv_teacher is not None and ss_ratio > 0.0:
+                use_pred = (torch.rand(B, device=x.device) < ss_ratio
+                            ).view(B, 1, 1).float()
+                prev = use_pred * cv_pred + (1 - use_pred) * y_cv_teacher[:, t:t+1, :]
+            elif y_cv_teacher is not None:
+                prev = y_cv_teacher[:, t:t+1, :]
+            else:
+                prev = cv_pred
+
+        return torch.cat(outputs, dim=1)
+
+    @torch.no_grad()
+    def predict(self, x: torch.Tensor,
+                target_len: Optional[int] = None) -> torch.Tensor:
+        self.eval()
+        orig = self.output_len
+        if target_len is not None:
+            self.output_len = target_len
+        out = self.forward(x)
+        self.output_len = orig
+        return out
+
+
+# ── LSTM CC Classifier-Regressor ──────────────────────────────────────────────
+
+class LSTMCCClassifierRegressor(nn.Module):
+    """
+    CC loop model using LSTM. Mirrors CCClassifierRegressor but with an LSTM
+    trunk instead of a simple linear layer, for consistency with the LSTM model.
+
+    Shared trunk  : [P1_TIT03, P1_PP04SP] last timestep → Linear → ReLU → Dropout
+    Classifier    : Linear(hidden→1)  logit for pump on/off
+    Regressor     : Linear(hidden→1)  pump speed
+    """
+
+    def __init__(self, n_inputs: int = 2, hidden: int = 32, dropout: float = 0.1):
+        super().__init__()
+        self.trunk = nn.Sequential(
+            nn.Linear(n_inputs, hidden),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+        )
+        self.classifier = nn.Linear(hidden, 1)
+        self.regressor  = nn.Linear(hidden, 1)
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if x.dim() == 3:
+            x = x[:, -1, :]
+        h = self.trunk(x)
+        return self.classifier(h), self.regressor(h)
+
+    @torch.no_grad()
+    def predict(self, x: torch.Tensor,
+                threshold: float = 0.5) -> tuple[torch.Tensor, torch.Tensor]:
+        self.eval()
+        logit, speed = self.forward(x)
+        pump_on = torch.sigmoid(logit) > threshold
+        pump_cv = pump_on.float() * speed
+        return pump_on.squeeze(-1), pump_cv
+
+
 # ── LSTM Plant (MIMO, autoregressive) ────────────────────────────────────────
 
 class LSTMPlant(nn.Module):

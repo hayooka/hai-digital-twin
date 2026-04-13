@@ -2,7 +2,7 @@
 train_transformer.py — Train the complete HAI Digital Twin (Transformer plant variant).
 
 Per-epoch training order:
-    1. Controllers (PC, LC, FC, TC) — GRUController × 4, MSE loss on CV sequence
+    1. Controllers (PC, LC, FC, TC) — TransformerController × 4, MSE loss on CV sequence
     2. CC Classifier-Regressor       — BCE (pump on/off) + MSE (speed) combined loss
     3. TransformerPlant              — scheduled-sampling MSE on PV
 
@@ -11,7 +11,7 @@ Validation (per epoch):
 
 Post-training:
     Closed-loop rollout over val windows (target_len horizon):
-        1. Run each GRUController on input window  →  predicted CV sequence
+        1. Run each TransformerController on input window  →  predicted CV sequence
         2. Patch x_cv_target with predicted CVs
         3. Run TransformerPlant autoregressively   →  PV sequence
     Compute NRMSE per PV channel.
@@ -33,8 +33,7 @@ sys.path.insert(0, str(ROOT / "02_data_pipeline"))
 sys.path.insert(0, str(ROOT / "03_model"))
 
 from pipeline import load_and_prepare_data
-from transformer import TransformerPlant
-from gru import GRUController, CCClassifierRegressor
+from transformer import TransformerPlant, TransformerController, TransformerCCClassifierRegressor
 from config import LOOPS, PV_COLS
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -63,7 +62,7 @@ PATIENCE    = 15      # early stopping: epochs without val improvement
 # Scheduled sampling — SS_MAX=0.0 keeps the fast parallel decoder path always
 SS_START    = 10
 SS_END      = 40
-SS_MAX      = 0.0
+SS_MAX      = 0.5
 
 OUT_DIR = Path("outputs/transformer_plant")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -129,17 +128,17 @@ plant_model = TransformerPlant(
 ).to(device)
 
 ctrl_models = {
-    ln: GRUController(
+    ln: TransformerController(
         n_inputs   = ctrl_data[ln]['X_train'].shape[-1],
-        hidden     = CTRL_HIDDEN,
-        layers     = CTRL_LAYERS,
+        d_model    = CTRL_HIDDEN,
+        n_layers   = CTRL_LAYERS,
         dropout    = DROPOUT,
         output_len = TARGET_LEN,
     ).to(device)
     for ln in CTRL_LOOPS
 }
 
-cc_model = CCClassifierRegressor(
+cc_model = TransformerCCClassifierRegressor(
     n_inputs=2, hidden=CC_HIDDEN, dropout=DROPOUT
 ).to(device)
 
@@ -386,8 +385,8 @@ for ln, m in ctrl_models.items():
         "n_inputs":    ctrl_data[ln]['X_train'].shape[-1],
         "hidden":      CTRL_HIDDEN,
         "layers":      CTRL_LAYERS,
-    }, OUT_DIR / f"gru_ctrl_{ln.lower()}.pt")
-    print(f"  Saved: gru_ctrl_{ln.lower()}.pt")
+    }, OUT_DIR / f"transformer_ctrl_{ln.lower()}.pt")
+    print(f"  Saved: transformer_ctrl_{ln.lower()}.pt")
 
 torch.save({
     "model_state": cc_model.state_dict(),
