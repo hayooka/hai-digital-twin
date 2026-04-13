@@ -475,20 +475,12 @@ def plot_multi_horizon(
     device: Optional[torch.device] = None,
 ) -> None:
     """
-    For each scenario, chain consecutive windows to reach each horizon.
-    Shows predicted vs actual for all PVs with red error fill.
-    Creates one plot per scenario with subplots for each horizon (stacked vertically).
+    For each scenario and each PV channel, create one plot with all horizons stacked vertically.
     
-    Args:
-        pv_true: Ground truth PV values (N, target_len, n_pv)
-        pv_preds: Predicted PV values (N, target_len, n_pv)
-        scenario_labels: Scenario labels for each window (N,)
-        model_name: Name of the model for plot title
-        out_dir: Output directory for saving plots
-        data: Optional full data dictionary (needed if chaining requires new predictions)
-        plant_model: Optional plant model (needed for chaining)
-        ctrl_models: Optional controller models (needed for chaining)
-        device: Optional torch device (needed for chaining)
+    Output structure:
+    - One image per scenario per PV channel
+    - Each image shows all horizons (300s, 600s, 900s, 1800s) stacked vertically
+    - Easy to compare how prediction degrades across horizons for a single PV
     """
     _validate_inputs(pv_true, pv_preds, "plot_multi_horizon")
     
@@ -526,10 +518,8 @@ def plot_multi_horizon(
         logger.info(f"Scenario {sc_id} ({sc_short}): {len(chain)} windows starting at idx {chain[0]}")
         
         # Prepare data for each horizon
-        horizon_data = []  # List of (horizon_seconds, actual_horizon, n_steps, true_arr, pred_arr)
-        
+        horizon_data = []
         for horizon_s in HORIZONS:
-            # How many windows needed to cover this horizon
             n_steps = max(1, int(np.ceil(horizon_s / TARGET_LEN)))
             n_steps = min(n_steps, len(chain))
             actual_horizon = n_steps * TARGET_LEN
@@ -538,7 +528,6 @@ def plot_multi_horizon(
             # Extract chained data
             true_parts = []
             pred_parts = []
-            
             for idx in chain[:n_steps]:
                 true_parts.append(pv_true[idx])
                 pred_parts.append(pv_preds[idx])
@@ -555,113 +544,92 @@ def plot_multi_horizon(
                 'pred_arr': pred_arr,
             })
         
-        # Create ONE plot for this scenario with subplots for each horizon
-        n_horizons = len(horizon_data)
-        
-        # Adjust figure size for clarity
-        # Taller figure to accommodate all horizons clearly
-        fig_height = 4.5 * n_horizons  # 4.5 inches per horizon row
-        fig_width = 18  # Wide enough for all PV columns
-        
-        fig, axes = plt.subplots(n_horizons, n_pv, 
-                                  figsize=(fig_width, fig_height),
-                                  sharex='col')
-        
-        # Handle case where n_pv == 1
-        if n_pv == 1:
-            axes = axes.reshape(-1, 1)
-        # Handle case where n_horizons == 1
-        if n_horizons == 1:
-            axes = axes.reshape(1, -1)
-        
-        fig.suptitle(
-            f"{model_name} — Scenario {sc_id}: {sc_name} | All Horizons (Stacked)",
-            fontsize=16, fontweight="bold", y=0.98
-        )
-        
-        # For each horizon (row)
-        for h_idx, hd in enumerate(horizon_data):
-            actual_horizon = hd['actual_horizon']
-            horizon_min = hd['horizon_min']
-            n_steps = hd['n_steps']
-            true_arr = hd['true_arr']
-            pred_arr = hd['pred_arr']
+        # For each PV channel, create a separate plot with all horizons stacked
+        for pv_idx in range(n_pv):
+            pv_name = PV_SHORT[pv_idx] if pv_idx < len(PV_SHORT) else f"PV{pv_idx}"
+            pv_full = PV_COLS[pv_idx] if pv_idx < len(PV_COLS) else f"P1_{pv_name}"
+            controller = _PV_TO_LOOP.get(pv_full, "")
             
-            t = np.arange(true_arr.shape[0])
+            # Create figure: one subplot per horizon (stacked vertically)
+            n_horizons = len(horizon_data)
+            fig_height = 4.0 * n_horizons  # 4 inches per horizon
+            fig_width = 14
             
-            # For each PV (column)
-            for k in range(n_pv):
-                ax = axes[h_idx, k]
+            fig, axes = plt.subplots(n_horizons, 1, figsize=(fig_width, fig_height), sharex=True)
+            
+            if n_horizons == 1:
+                axes = [axes]
+            
+            # Title includes scenario and PV info
+            fig.suptitle(
+                f"{model_name} — Scenario {sc_id}: {sc_name} | PV: {pv_name} (Controller: {controller})\n"
+                f"Prediction performance across all horizons",
+                fontsize=14, fontweight="bold", y=0.98
+            )
+            
+            # For each horizon (subplot)
+            for h_idx, hd in enumerate(horizon_data):
+                ax = axes[h_idx]
                 
-                true_k = true_arr[:, k]
-                pred_k = pred_arr[:, k]
+                actual_horizon = hd['actual_horizon']
+                horizon_min = hd['horizon_min']
+                n_steps = hd['n_steps']
+                true_arr = hd['true_arr']
+                pred_arr = hd['pred_arr']
                 
-                # Blue actual, red dashed predicted with thicker lines for clarity
+                # Extract data for this PV only
+                true_k = true_arr[:, pv_idx]
+                pred_k = pred_arr[:, pv_idx]
+                
+                t = np.arange(len(true_k))
+                
+                # Plot
                 ax.plot(t, true_k, color="steelblue", linewidth=2.0, 
                         label="Ground truth", zorder=3)
                 ax.plot(t, pred_k, color="crimson", linewidth=1.8,
-                        linestyle="--", label="Prediction (closed-loop)", zorder=3)
+                        linestyle="--", label="Prediction", zorder=3)
                 
-                # Red fill = error magnitude
-                ax.fill_between(
-                    t, true_k, pred_k,
-                    where=np.ones_like(t, dtype=bool),
-                    interpolate=True,
-                    color="red", alpha=0.15,
-                    label="Error magnitude",
-                    zorder=2
-                )
+                # Error fill
+                ax.fill_between(t, true_k, pred_k,
+                               color="red", alpha=0.15, label="Error", zorder=2)
                 
-                # Vertical lines marking window boundaries
+                # Window boundaries
                 for w in range(1, n_steps):
                     ax.axvline(x=w * TARGET_LEN, color="gray",
-                               linewidth=0.8, linestyle=":", alpha=0.7)
+                              linewidth=0.8, linestyle=":", alpha=0.7)
                 
-                # Calculate NRMSE for this channel
+                # NRMSE calculation
                 nrmse_val = _nrmse(true_k, pred_k)
                 status = "✓ PASS" if nrmse_val < NRMSE_THRESHOLD else "✗ FAIL"
                 status_color = "green" if nrmse_val < NRMSE_THRESHOLD else "red"
                 
-                # Set title for first row only (to avoid clutter)
-                if h_idx == 0:
-                    ax.set_title(f"{PV_SHORT[k] if k < len(PV_SHORT) else f'PV{k}'}\n[NRMSE = {nrmse_val:.4f}] [{status}]", 
-                                fontsize=11, color=status_color, fontweight='bold')
-                else:
-                    # For non-first rows, just show the status compactly in a box
-                    ax.text(0.02, 0.95, f"NRMSE={nrmse_val:.4f} {status}", 
-                           transform=ax.transAxes, fontsize=9,
-                           verticalalignment='top', color=status_color,
-                           bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, edgecolor=status_color))
+                # Subplot title with horizon info
+                ax.set_title(
+                    f"Horizon: {hd['horizon_s']}s ({horizon_min:.0f}min) | "
+                    f"{n_steps} windows | NRMSE = {nrmse_val:.4f} [{status}]",
+                    fontsize=11, color=status_color
+                )
                 
-                # Y-axis label with horizon info
-                ax.set_ylabel(f"{hd['horizon_s']}s\n({hd['horizon_min']:.0f}min)", fontsize=10)
-                
-                # Increase tick label size
+                ax.set_ylabel("Value", fontsize=10)
                 ax.tick_params(axis='both', labelsize=9)
                 ax.grid(True, linestyle="--", alpha=0.3, linewidth=0.5)
+                ax.legend(loc="upper right", fontsize=9, framealpha=0.9)
                 
-                # Only show legend on first row, first column
-                if h_idx == 0 and k == 0:
-                    ax.legend(loc="upper right", fontsize=9, framealpha=0.9)
-                
-                # Add scenario attack shading if applicable
+                # Attack shading
                 if sc_id > 0:
-                    ax.axvspan(0, true_arr.shape[0] - 1, alpha=0.04, color="red")
-        
-        # Set common xlabel only on bottom row
-        for k in range(n_pv):
-            axes[-1, k].set_xlabel("Time steps (1 step = 1 second)", fontsize=11)
-        
-        # Adjust spacing between subplots
-        plt.subplots_adjust(hspace=0.3, wspace=0.25)
-        plt.tight_layout()
-        
-        # Save one file per scenario (all horizons in one plot) with high DPI
-        path = out_dir / f"scenario_{sc_id}_{sc_short}_all_horizons.png"
-        fig.savefig(path, dpi=200, bbox_inches="tight")  # Increased DPI for clarity
-        logger.info(f"Saved: {path.name}")
-        plt.close(fig)
-        
+                    ax.axvspan(0, len(true_k) - 1, alpha=0.04, color="red")
+            
+            # X-axis label on bottom subplot only
+            axes[-1].set_xlabel("Time steps (1 step = 1 second)", fontsize=11)
+            
+            plt.tight_layout()
+            
+            # Save: one file per scenario per PV
+            path = out_dir / f"scenario_{sc_id}_{sc_short}_PV{pv_idx:02d}_{pv_name}_all_horizons.png"
+            fig.savefig(path, dpi=200, bbox_inches="tight")
+            logger.info(f"Saved: {path.name}")
+            plt.close(fig)
+              
 # ── Main plotting function ────────────────────────────────────────────────────
 
 def plot_all(
