@@ -21,6 +21,7 @@ Run:
 """
 
 import sys
+import json
 import random
 import numpy as np
 import torch
@@ -56,12 +57,13 @@ LR          = 1e-4    # lower LR typical for Transformers
 CTRL_LR     = 1e-3
 WD          = 1e-5
 GRAD_CLIP   = 1.0
-SCH_PAT     = 10
+SCH_PAT     = 5
 SCH_FAC     = 0.5
-# Scheduled sampling
+PATIENCE    = 15      # early stopping: epochs without val improvement
+# Scheduled sampling — SS_MAX=0.0 keeps the fast parallel decoder path always
 SS_START    = 10
-SS_END      = 100
-SS_MAX      = 0.5
+SS_END      = 40
+SS_MAX      = 0.0
 
 OUT_DIR = Path("outputs/transformer_plant")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -237,6 +239,7 @@ def val_cc() -> float:
 print(f"\nStep 3: Training for {EPOCHS} epochs...")
 best_plant_val   = float("inf")
 best_plant_state = plant_model.state_dict()
+patience_counter = 0
 
 for epoch in range(1, EPOCHS + 1):
     ss = ss_ratio_for(epoch)
@@ -285,6 +288,23 @@ for epoch in range(1, EPOCHS + 1):
     if pval < best_plant_val:
         best_plant_val   = pval
         best_plant_state = {k: v.clone() for k, v in plant_model.state_dict().items()}
+        patience_counter = 0
+        torch.save({
+            "model_state": best_plant_state,
+            "n_plant_in":  N_PLANT_IN,
+            "n_pv":        N_PV,
+            "n_scenarios": N_SCENARIOS,
+            "d_model":     D_MODEL,
+            "n_heads":     N_HEADS,
+            "n_layers":    N_LAYERS,
+            "epoch":       epoch,
+            "val_loss":    best_plant_val,
+        }, OUT_DIR / "transformer_plant.pt")
+    else:
+        patience_counter += 1
+        if patience_counter >= PATIENCE:
+            print(f"\n  Early stopping at epoch {epoch} (no improvement for {PATIENCE} epochs)")
+            break
 
     if epoch % 10 == 0 or epoch == 1:
         ctrl_str = "  ".join(f"{ln}={v:.4f}" for ln, v in ctrl_train.items())
@@ -335,6 +355,16 @@ print("  Closed-loop NRMSE per PV:")
 for name, v in zip(PV_COLS, nrmse):
     print(f"    {name:<30s}: {v:.4f}")
 print(f"  Mean NRMSE: {np.mean(nrmse):.4f}")
+
+results = {
+    "model": "Transformer",
+    "nrmse_per_pv": {name: float(v) for name, v in zip(PV_COLS, nrmse)},
+    "mean_nrmse": float(np.mean(nrmse)),
+    "best_val_loss": float(best_plant_val),
+}
+with open(OUT_DIR / "results.json", "w") as f:
+    json.dump(results, f, indent=2)
+print(f"  Saved: results.json")
 
 # ── 6. Save checkpoints ───────────────────────────────────────────────────────
 print(f"\nStep 5: Saving checkpoints to {OUT_DIR}/")

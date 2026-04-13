@@ -129,12 +129,13 @@ def plot_horizon_validation(
     save_path     : if given, figure is saved there (PNG, 150 dpi).
     """
     n_pv = len(pv_cols)
-    assert pv_true.shape  == (horizon_steps, n_pv), \
-        f"pv_true shape {pv_true.shape} != ({horizon_steps}, {n_pv})"
-    assert pv_preds.shape == (horizon_steps, n_pv), \
-        f"pv_preds shape {pv_preds.shape} != ({horizon_steps}, {n_pv})"
+    actual_steps = pv_true.shape[0]
+    assert pv_true.shape[1]  == n_pv, \
+        f"pv_true has {pv_true.shape[1]} features, expected {n_pv}"
+    assert pv_preds.shape == pv_true.shape, \
+        f"pv_preds shape {pv_preds.shape} != pv_true shape {pv_true.shape}"
 
-    t = np.arange(horizon_steps)
+    t = np.arange(actual_steps)
 
     fig, axes = plt.subplots(n_pv, 1, figsize=(16, 15), sharex=True)
     if n_pv == 1:
