@@ -21,6 +21,7 @@ Run:
 """
 
 import sys
+import json
 import random
 import numpy as np
 import torch
@@ -56,11 +57,12 @@ LR          = 1e-3
 CTRL_LR     = 1e-3
 WD          = 1e-5
 GRAD_CLIP   = 1.0
-SCH_PAT     = 10
+SCH_PAT     = 5
 SCH_FAC     = 0.5
+PATIENCE    = 15      # early stopping: epochs without val improvement
 # Scheduled sampling
 SS_START    = 10
-SS_END      = 100
+SS_END      = 40
 SS_MAX      = 0.5
 
 OUT_DIR = Path("outputs/gru_plant")
@@ -253,6 +255,7 @@ def val_cc() -> float:
 print(f"\nStep 3: Training for {EPOCHS} epochs...")
 best_plant_val   = float("inf")
 best_plant_state = plant_model.state_dict()
+patience_counter = 0
 
 train_losses: list[float] = []
 val_losses:   list[float] = []
@@ -317,6 +320,22 @@ for epoch in range(1, EPOCHS + 1):
     if pval < best_plant_val:
         best_plant_val   = pval
         best_plant_state = {k: v.clone() for k, v in plant_model.state_dict().items()}
+        patience_counter = 0
+        torch.save({
+            "model_state": best_plant_state,
+            "n_plant_in":  N_PLANT_IN,
+            "n_pv":        N_PV,
+            "n_scenarios": N_SCENARIOS,
+            "hidden":      HIDDEN,
+            "layers":      LAYERS,
+            "epoch":       epoch,
+            "val_loss":    best_plant_val,
+        }, OUT_DIR / "gru_plant.pt")
+    else:
+        patience_counter += 1
+        if patience_counter >= PATIENCE:
+            print(f"\n  Early stopping at epoch {epoch} (no improvement for {PATIENCE} epochs)")
+            break
 
     if epoch % 10 == 0 or epoch == 1:
         ctrl_str = "  ".join(f"{ln}={v:.4f}" for ln, v in ctrl_train.items())
@@ -378,30 +397,19 @@ for name, v in zip(PV_COLS, nrmse):
     print(f"    {name:<30s}: {v:.4f}")
 print(f"  Mean NRMSE: {np.mean(nrmse):.4f}")
 
-# ── Plots 2–5: closed-loop time series for each horizon ───────────────────────
-# pv_preds / pv_true: (N_val, TARGET_LEN, N_PV) — use first sample for illustration.
-# We slice each horizon from the same fixed-length arrays; if your TARGET_LEN is
-# shorter than a requested horizon the slice just clips to TARGET_LEN.
-print("\nStep 4b: Generating closed-loop horizon plots...")
+results = {
+    "model": "GRU",
+    "nrmse_per_pv": {name: float(v) for name, v in zip(PV_COLS, nrmse)},
+    "mean_nrmse": float(np.mean(nrmse)),
+    "best_val_loss": float(best_plant_val),
+    "train_losses": [float(x) for x in train_losses],
+    "val_losses":   [float(x) for x in val_losses],
+}
+with open(OUT_DIR / "results.json", "w") as f:
+    json.dump(results, f, indent=2)
+print(f"  Saved: results.json")
 
-HORIZONS = [300, 600, 900, 1800]
-horizon_data: dict = {}
-sample_idx = 0   # representative validation sample to plot
-
-for H in HORIZONS:
-    steps = min(H, TARGET_LEN)
-    horizon_data[H] = (
-        pv_true[sample_idx, :steps, :],    # (steps, N_PV)
-        pv_preds[sample_idx, :steps, :],   # (steps, N_PV)
-    )
-
-plot_all_horizons(
-    horizon_data, PV_COLS,
-    model_name="GRU",
-    out_dir=OUT_DIR,
-)
-
-# ── 6. Save checkpoints ───────────────────────────────────────────────────────
+# ── 5. Save checkpoints (before plotting so a crash in plots doesn't lose the model) ──
 print(f"\nStep 5: Saving checkpoints to {OUT_DIR}/")
 
 torch.save({
@@ -429,3 +437,23 @@ torch.save({
     "hidden":      CC_HIDDEN,
 }, OUT_DIR / "cc_model.pt")
 print(f"  Saved: cc_model.pt")
+
+# ── Plots 2–5: closed-loop time series for each horizon ───────────────────────
+print("\nStep 6: Generating closed-loop horizon plots...")
+
+HORIZONS = [300, 600, 900, 1800]
+horizon_data: dict = {}
+sample_idx = 0   # representative validation sample to plot
+
+for H in HORIZONS:
+    steps = min(H, TARGET_LEN)
+    horizon_data[H] = (
+        pv_true[sample_idx, :steps, :],    # (steps, N_PV)
+        pv_preds[sample_idx, :steps, :],   # (steps, N_PV)
+    )
+
+plot_all_horizons(
+    horizon_data, PV_COLS,
+    model_name="GRU",
+    out_dir=OUT_DIR,
+)
