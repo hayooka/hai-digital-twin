@@ -42,6 +42,8 @@ PV_SHORT = [c.replace("P1_", "") for c in PV_COLS]
 HORIZONS = [300, 600, 900, 1800]
 HORIZON_LABELS = {300: "5 min", 600: "10 min", 900: "15 min", 1800: "30 min"}
 NRMSE_THRESHOLD = 0.10   # pass/fail gate (same as config.yaml causal_threshold)
+TARGET_LEN = 180  # one window = 180 steps = 3 min
+N_WINDOWS = 8     # windows to chain per horizon
 
 # Controller loop name for each PV
 _PV_TO_LOOP = {pv: ln for ln, loop in LOOPS.items() for pv in [loop.pv]}
@@ -95,24 +97,50 @@ def _nrmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
         return float('nan')
 
 
-def _pick_best_window_for_pv(pv_true: np.ndarray, pv_idx: int, window_indices: np.ndarray) -> int:
+def _pick_best_start_window(pv_true: np.ndarray, indices: np.ndarray) -> int:
     """
-    Pick the window with the highest variance for a specific PV channel.
+    Pick the window with the highest variance across all PVs to start chaining.
     
     Args:
         pv_true: Ground truth PV values (N, target_len, n_pv)
-        pv_idx: Index of PV channel to consider
-        window_indices: Array of window indices to choose from
+        indices: Array of window indices to choose from
     
     Returns:
-        Selected window index
+        Selected starting window index
     """
-    if len(window_indices) == 0:
+    if len(indices) == 0:
         raise ValueError("Empty window_indices array")
     
-    # Calculate variance for this specific PV across all windows
-    variances = pv_true[window_indices, :, pv_idx].var(axis=1)
-    return int(window_indices[variances.argmax()])
+    # Calculate variance across all PVs for each window
+    variances = pv_true[indices].var(axis=(1, 2))
+    return int(indices[variances.argmax()])
+
+
+def _get_consecutive_chain(
+    start_idx: int,
+    scenario_labels: np.ndarray,
+    target_scenario: int,
+    max_windows: int
+) -> List[int]:
+    """
+    Build a chain of consecutive windows all belonging to the same scenario.
+    
+    Args:
+        start_idx: Starting index
+        scenario_labels: Array of scenario labels for each window
+        target_scenario: The scenario we want to chain
+        max_windows: Maximum number of windows to include
+    
+    Returns:
+        List of consecutive indices belonging to the target scenario
+    """
+    chain = []
+    for idx in range(start_idx, len(scenario_labels)):
+        if scenario_labels[idx] == target_scenario:
+            chain.append(idx)
+        if len(chain) >= max_windows:
+            break
+    return chain
 
 
 # ── Inference ────────────────────────────────────────────────────────────────
@@ -433,7 +461,7 @@ def plot_scenario_predictions(
         plt.close(fig)
 
 
-# ── Plot: multi-horizon for normal scenario (CLEAN VERSION - ONE WINDOW PER PV) ──
+# ── Plot: multi-horizon with chained windows for all scenarios ────────────────
 
 def plot_multi_horizon(
     pv_true: np.ndarray,
@@ -441,225 +469,167 @@ def plot_multi_horizon(
     scenario_labels: np.ndarray,
     model_name: str,
     out_dir: Path,
+    data: Optional[Dict] = None,
+    plant_model: Any = None,
+    ctrl_models: Optional[Dict[str, Any]] = None,
+    device: Optional[torch.device] = None,
 ) -> None:
     """
-    For scenario 0 (normal), produce one figure per horizon.
-    Each PV gets its own subplot showing ONE representative window.
+    For each scenario and each PV channel, create one plot with all horizons stacked vertically.
     
-    Args:
-        pv_true: Ground truth PV values (N, target_len, n_pv)
-        pv_preds: Predicted PV values (N, target_len, n_pv)
-        scenario_labels: Scenario labels for each window (N,)
-        model_name: Name of the model for plot title
-        out_dir: Output directory for saving plots
+    Output structure:
+    - One image per scenario per PV channel
+    - Each image shows all horizons (300s, 600s, 900s, 1800s) stacked vertically
+    - Easy to compare how prediction degrades across horizons for a single PV
     """
     _validate_inputs(pv_true, pv_preds, "plot_multi_horizon")
     
-    normal_idx = np.where(scenario_labels == 0)[0]
-    if len(normal_idx) == 0:
-        logger.warning("No normal windows for multi-horizon plot, skipping.")
-        return
-    
-    target_len = pv_true.shape[1]
     n_pv = pv_true.shape[2]
     
     logger.info("\n" + "=" * 60)
-    logger.info(f"CLOSED-LOOP VALIDATION — MULTI-HORIZON ({model_name})")
+    logger.info(f"MULTI-HORIZON PLOTS — CHAINED WINDOWS ({model_name})")
     logger.info("=" * 60)
     
-    for H in HORIZONS:
-        steps = min(H, target_len)
-        t_min = np.arange(steps) / 60.0  # x-axis in minutes
-        label = HORIZON_LABELS.get(H, f"{H}s")
+    # For each scenario
+    for sc_id in [0, 1, 2, 3]:
+        sc_short = SCENARIO_SHORT.get(sc_id, f"sc{sc_id}")
+        sc_name = SCENARIO_NAMES.get(sc_id, f"Scenario {sc_id}")
         
-        logger.info(f"\n--- Horizon: {H}s ({label}) ---")
+        # Find windows for this scenario
+        indices = np.where(scenario_labels == sc_id)[0]
+        if len(indices) == 0:
+            logger.info(f"No windows for scenario {sc_id} ({sc_short}), skipping.")
+            continue
         
-        # Compute NRMSE statistics across all windows
-        nrmse_per_pv: Dict[int, List[float]] = {k: [] for k in range(n_pv)}
+        # Pick best starting window based on variance
+        try:
+            best_start = _pick_best_start_window(pv_true, indices)
+        except Exception as e:
+            logger.error(f"Error picking start window for scenario {sc_id}: {e}")
+            continue
         
-        for win_idx in normal_idx:
-            true_w = pv_true[win_idx, :steps, :]
-            pred_w = pv_preds[win_idx, :steps, :]
+        # Build consecutive chain
+        chain = _get_consecutive_chain(best_start, scenario_labels, sc_id, N_WINDOWS)
+        
+        # If not enough consecutive windows, use whatever is available
+        if len(chain) < 2:
+            chain = list(indices[:N_WINDOWS])
+        
+        logger.info(f"Scenario {sc_id} ({sc_short}): {len(chain)} windows starting at idx {chain[0]}")
+        
+        # Prepare data for each horizon
+        horizon_data = []
+        for horizon_s in HORIZONS:
+            n_steps = max(1, int(np.ceil(horizon_s / TARGET_LEN)))
+            n_steps = min(n_steps, len(chain))
+            actual_horizon = n_steps * TARGET_LEN
+            horizon_min = actual_horizon / 60
             
-            for k in range(n_pv):
-                nrmse_val = _nrmse(true_w[:, k], pred_w[:, k])
-                if not np.isnan(nrmse_val):
-                    nrmse_per_pv[k].append(nrmse_val)
-        
-        # Print statistics table
-        logger.info(f"\n{'PV Signal':<15} {'Mean NRMSE':<12} {'Std':<10} {'Min':<10} {'Max':<10} Pass?")
-        horizon_results: Dict[int, Dict] = {}
-        
-        for k in range(n_pv):
-            vals = nrmse_per_pv[k]
-            if vals:
-                m, s = float(np.mean(vals)), float(np.std(vals))
-                min_val, max_val = float(np.min(vals)), float(np.max(vals))
-                passed = m < NRMSE_THRESHOLD
-                horizon_results[k] = {"mean": m, "std": s, "min": min_val, "max": max_val, "passed": passed}
-                tick = "✓" if passed else "✗"
-                pv_name = PV_SHORT[k] if k < len(PV_SHORT) else f"PV{k}"
-                logger.info(f"  {tick} {pv_name:<13} {m:<12.4f} {s:<10.4f} {min_val:<10.4f} {max_val:<10.4f} {'PASS' if passed else 'FAIL'}")
-            else:
-                logger.warning(f"  No valid NRMSE values for PV{k}")
-                horizon_results[k] = {"mean": float('nan'), "std": float('nan'), "min": float('nan'), "max": float('nan'), "passed": False}
-        
-        # Select best window for each PV
-        selected_windows = {}
-        for k in range(n_pv):
-            try:
-                selected_windows[k] = _pick_best_window_for_pv(pv_true, k, normal_idx)
-            except Exception as e:
-                logger.error(f"Error selecting window for PV{k}: {e}")
-                selected_windows[k] = normal_idx[0] if len(normal_idx) > 0 else 0
-        
-        # Create figure - one subplot per PV
-        n_cols = 2 if n_pv > 1 else 1
-        n_rows = (n_pv + n_cols - 1) // n_cols
-        
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 5 * n_rows))
-        if n_pv == 1:
-            axes = np.array([axes])
-        axes = axes.flatten()
-        
-        fig.suptitle(
-            f"{model_name} — Normal Operation | Horizon: {H}s ({label})\n"
-            f"Best representative window for each PV (total {len(normal_idx)} windows available)",
-            fontsize=14, fontweight="bold", y=0.98
-        )
-        
-        for k in range(n_pv):
-            ax = axes[k]
-            win_idx = selected_windows[k]
+            # Extract chained data
+            true_parts = []
+            pred_parts = []
+            for idx in chain[:n_steps]:
+                true_parts.append(pv_true[idx])
+                pred_parts.append(pv_preds[idx])
             
-            # Get data for this window
-            true_w = pv_true[win_idx, :steps, k]
-            pred_w = pv_preds[win_idx, :steps, k]
+            true_arr = np.concatenate(true_parts, axis=0)
+            pred_arr = np.concatenate(pred_parts, axis=0)
             
-            # Calculate metrics
-            specific_nrmse = _nrmse(true_w, pred_w)
-            stats = horizon_results[k]
-            pv_name = PV_SHORT[k] if k < len(PV_SHORT) else f"PV{k}"
-            ln = _PV_TO_LOOP.get(PV_COLS[k] if k < len(PV_COLS) else f"P1_{pv_name}", "")
+            horizon_data.append({
+                'horizon_s': horizon_s,
+                'actual_horizon': actual_horizon,
+                'horizon_min': horizon_min,
+                'n_steps': n_steps,
+                'true_arr': true_arr,
+                'pred_arr': pred_arr,
+            })
+        
+        # For each PV channel, create a separate plot with all horizons stacked
+        for pv_idx in range(n_pv):
+            pv_name = PV_SHORT[pv_idx] if pv_idx < len(PV_SHORT) else f"PV{pv_idx}"
+            pv_full = PV_COLS[pv_idx] if pv_idx < len(PV_COLS) else f"P1_{pv_name}"
+            controller = _PV_TO_LOOP.get(pv_full, "")
             
-            # Determine pass/fail status
-            if stats["passed"]:
-                status_color = "green"
-                status_text = "✓ PASS"
-            else:
-                status_color = "red"
-                status_text = "✗ FAIL"
+            # Create figure: one subplot per horizon (stacked vertically)
+            n_horizons = len(horizon_data)
+            fig_height = 4.0 * n_horizons  # 4 inches per horizon
+            fig_width = 14
             
-            # Create comprehensive title
-            title = (
-                f"{ln} — {pv_name}\n"
-                f"NRMSE = {stats['mean']:.4f} ± {stats['std']:.4f}  |  "
-                f"Range: [{stats['min']:.4f}, {stats['max']:.4f}]  |  "
-                f"This window: {specific_nrmse:.4f}  [{status_text}]"
+            fig, axes = plt.subplots(n_horizons, 1, figsize=(fig_width, fig_height), sharex=True)
+            
+            if n_horizons == 1:
+                axes = [axes]
+            
+            # Title includes scenario and PV info
+            fig.suptitle(
+                f"{model_name} — Scenario {sc_id}: {sc_name} | PV: {pv_name} (Controller: {controller})\n"
+                f"Prediction performance across all horizons",
+                fontsize=14, fontweight="bold", y=0.98
             )
-            ax.set_title(title, fontsize=10, color=status_color, fontweight='bold')
             
-            # Plot actual vs predicted
-            ax.plot(t_min, true_w, color="steelblue", linewidth=2.0,
-                    label=f"Actual (window {win_idx})", alpha=0.9)
-            ax.plot(t_min, pred_w, color="crimson", linewidth=2.0,
-                    linestyle="--", label=f"Predicted (window {win_idx})", alpha=0.9)
+            # For each horizon (subplot)
+            for h_idx, hd in enumerate(horizon_data):
+                ax = axes[h_idx]
+                
+                actual_horizon = hd['actual_horizon']
+                horizon_min = hd['horizon_min']
+                n_steps = hd['n_steps']
+                true_arr = hd['true_arr']
+                pred_arr = hd['pred_arr']
+                
+                # Extract data for this PV only
+                true_k = true_arr[:, pv_idx]
+                pred_k = pred_arr[:, pv_idx]
+                
+                t = np.arange(len(true_k))
+                
+                # Plot
+                ax.plot(t, true_k, color="steelblue", linewidth=2.0, 
+                        label="Ground truth", zorder=3)
+                ax.plot(t, pred_k, color="crimson", linewidth=1.8,
+                        linestyle="--", label="Prediction", zorder=3)
+                
+                # Error fill
+                ax.fill_between(t, true_k, pred_k,
+                               color="red", alpha=0.15, label="Error", zorder=2)
+                
+                # Window boundaries
+                for w in range(1, n_steps):
+                    ax.axvline(x=w * TARGET_LEN, color="gray",
+                              linewidth=0.8, linestyle=":", alpha=0.7)
+                
+                # NRMSE calculation
+                nrmse_val = _nrmse(true_k, pred_k)
+                status = "✓ PASS" if nrmse_val < NRMSE_THRESHOLD else "✗ FAIL"
+                status_color = "green" if nrmse_val < NRMSE_THRESHOLD else "red"
+                
+                # Subplot title with horizon info
+                ax.set_title(
+                    f"Horizon: {hd['horizon_s']}s ({horizon_min:.0f}min) | "
+                    f"{n_steps} windows | NRMSE = {nrmse_val:.4f} [{status}]",
+                    fontsize=11, color=status_color
+                )
+                
+                ax.set_ylabel("Value", fontsize=10)
+                ax.tick_params(axis='both', labelsize=9)
+                ax.grid(True, linestyle="--", alpha=0.3, linewidth=0.5)
+                ax.legend(loc="upper right", fontsize=9, framealpha=0.9)
+                
+                # Attack shading
+                if sc_id > 0:
+                    ax.axvspan(0, len(true_k) - 1, alpha=0.04, color="red")
             
-            # Add error band
-            ax.fill_between(t_min, true_w, pred_w,
-                            color="red", alpha=0.15, label="Prediction error")
+            # X-axis label on bottom subplot only
+            axes[-1].set_xlabel("Time steps (1 step = 1 second)", fontsize=11)
             
-            # Add horizontal line at zero for reference
-            ax.axhline(y=0, color='black', linestyle='-', linewidth=0.5, alpha=0.3)
+            plt.tight_layout()
             
-            ax.set_ylabel("Normalised Value", fontsize=10)
-            ax.set_xlabel("Time (minutes)", fontsize=10)
-            ax.legend(loc="upper right", fontsize=9)
-            ax.grid(True, linestyle="--", alpha=0.4)
-            
-            # Add minor grid
-            ax.grid(True, which='minor', linestyle=':', alpha=0.2)
-            ax.minorticks_on()
-        
-        # Hide unused subplots
-        for k in range(n_pv, len(axes)):
-            axes[k].set_visible(False)
-        
-        plt.tight_layout()
-        
-        path = out_dir / f"multi_horizon_{H}s.png"
-        fig.savefig(path, dpi=150, bbox_inches="tight")
-        logger.info(f"Saved: {path.name}")
-        plt.close(fig)
-        
-        # Also create a combined summary table for this horizon
-        _create_summary_table(horizon_results, H, model_name, out_dir)
-
-
-def _create_summary_table(horizon_results: Dict[int, Dict], horizon: int, model_name: str, out_dir: Path) -> None:
-    """Create a text summary table for a specific horizon."""
-    n_pv = len(horizon_results)
-    
-    # Create figure for table
-    fig, ax = plt.subplots(figsize=(10, 4))
-    ax.axis('tight')
-    ax.axis('off')
-    
-    # Prepare table data
-    headers = ['PV Signal', 'Controller', 'Mean NRMSE', 'Std Dev', 'Min NRMSE', 'Max NRMSE', 'Status']
-    table_data = []
-    
-    for k in range(n_pv):
-        stats = horizon_results[k]
-        pv_name = PV_SHORT[k] if k < len(PV_SHORT) else f"PV{k}"
-        ln = _PV_TO_LOOP.get(PV_COLS[k] if k < len(PV_COLS) else f"P1_{pv_name}", "")
-        status = '✓ PASS' if stats['passed'] else '✗ FAIL'
-        
-        table_data.append([
-            pv_name,
-            ln,
-            f"{stats['mean']:.4f}",
-            f"{stats['std']:.4f}",
-            f"{stats['min']:.4f}",
-            f"{stats['max']:.4f}",
-            status
-        ])
-    
-    # Create table
-    table = ax.table(cellText=table_data, colLabels=headers,
-                     cellLoc='center', loc='center',
-                     colWidths=[0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12])
-    
-    # Style the table
-    table.auto_set_font_size(False)
-    table.set_fontsize(10)
-    table.scale(1.2, 1.5)
-    
-    # Color the status column
-    for i, row in enumerate(table_data):
-        status_cell = table[(i+1, 6)]
-        if 'PASS' in row[6]:
-            status_cell.set_facecolor('#90EE90')  # Light green
-        else:
-            status_cell.set_facecolor('#FFB6C1')  # Light red
-    
-    # Style header row
-    for j in range(len(headers)):
-        header_cell = table[(0, j)]
-        header_cell.set_facecolor('#4682B4')  # Steel blue
-        header_cell.get_text().set_fontweight('bold')
-        header_cell.get_text().set_color('white')
-    
-    ax.set_title(f"{model_name} — {HORIZON_LABELS.get(horizon, f'{horizon}s')} Horizon Performance Summary",
-                 fontsize=12, fontweight='bold', pad=20)
-    
-    plt.tight_layout()
-    path = out_dir / f"summary_{horizon}s.png"
-    fig.savefig(path, dpi=150, bbox_inches="tight")
-    logger.info(f"Saved: {path.name}")
-    plt.close(fig)
-
-
+            # Save: one file per scenario per PV
+            path = out_dir / f"scenario_{sc_id}_{sc_short}_PV{pv_idx:02d}_{pv_name}_all_horizons.png"
+            fig.savefig(path, dpi=200, bbox_inches="tight")
+            logger.info(f"Saved: {path.name}")
+            plt.close(fig)
+              
 # ── Main plotting function ────────────────────────────────────────────────────
 
 def plot_all(
@@ -741,10 +711,14 @@ def plot_all(
             model_name, out_dir,
         )
         
-        logger.info("Generating multi-horizon plots (normal scenario)...")
+        logger.info("Generating multi-horizon plots (all scenarios with chained windows)...")
         plot_multi_horizon(
             pv_true_test, pv_preds_test, scenario_test,
             model_name, out_dir,
+            data=data,
+            plant_model=plant_model,
+            ctrl_models=ctrl_models,
+            device=device,
         )
     except Exception as e:
         logger.error(f"Error processing test split: {e}")

@@ -388,3 +388,116 @@ class TransformerPlant(nn.Module):
         """Full autoregressive rollout (no teacher forcing)."""
         self.eval()
         return self.forward(x_cv, x_cv_target, pv_init, scenario)
+
+
+# ── Transformer Controller ────────────────────────────────────────────────────
+
+class TransformerController(nn.Module):
+    """
+    Per-loop Transformer seq2seq controller. Mirrors GRUController/LSTMController
+    but uses a Transformer encoder-decoder.
+
+    Encoder : [SP, PV] (or [SP, PV, CV_fb]) over input_len steps → memory
+    Decoder : predict CV for target_len steps autoregressively
+    """
+
+    def __init__(self, n_inputs: int = 2, d_model: int = 64, n_heads: int = 4,
+                 n_layers: int = 2, ffn_dim: int = 128, dropout: float = 0.1,
+                 output_len: int = 180):
+        super().__init__()
+        self.output_len = output_len
+        self.d_model = d_model
+
+        self.src_proj  = nn.Linear(n_inputs, d_model)
+        self.tgt_proj  = nn.Linear(1, d_model)
+        self.pos_enc   = PositionalEncoding(d_model, max_len=512, dropout=dropout)
+
+        encoder_layer  = nn.TransformerEncoderLayer(d_model, n_heads, ffn_dim,
+                                                    dropout, batch_first=True)
+        decoder_layer  = nn.TransformerDecoderLayer(d_model, n_heads, ffn_dim,
+                                                    dropout, batch_first=True)
+        self.encoder   = nn.TransformerEncoder(encoder_layer, n_layers)
+        self.decoder   = nn.TransformerDecoder(decoder_layer, n_layers)
+        self.out       = nn.Linear(d_model, 1)
+
+    def _causal_mask(self, sz: int, device) -> torch.Tensor:
+        return torch.triu(torch.ones(sz, sz, device=device), diagonal=1).bool()
+
+    def forward(self, x: torch.Tensor,
+                y_cv_teacher: Optional[torch.Tensor] = None,
+                ss_ratio: float = 0.0) -> torch.Tensor:
+        B = x.size(0)
+        memory = self.encoder(self.pos_enc(self.src_proj(x)))
+
+        prev = torch.zeros(B, 1, 1, device=x.device)
+        dec_tokens = [prev]
+        outputs = []
+
+        for t in range(self.output_len):
+            tgt_seq = torch.cat(dec_tokens, dim=1)           # (B, t+1, 1)
+            tgt_emb = self.pos_enc(self.tgt_proj(tgt_seq))
+            mask    = self._causal_mask(tgt_seq.size(1), x.device)
+            out     = self.decoder(tgt_emb, memory, tgt_mask=mask)
+            cv_pred = self.out(out[:, -1:, :])               # (B, 1, 1)
+            outputs.append(cv_pred)
+
+            if y_cv_teacher is not None and ss_ratio > 0.0:
+                use_pred = (torch.rand(B, device=x.device) < ss_ratio
+                            ).view(B, 1, 1).float()
+                next_tok = use_pred * cv_pred + (1 - use_pred) * y_cv_teacher[:, t:t+1, :]
+            elif y_cv_teacher is not None:
+                next_tok = y_cv_teacher[:, t:t+1, :]
+            else:
+                next_tok = cv_pred
+            dec_tokens.append(next_tok)
+
+        return torch.cat(outputs, dim=1)
+
+    @torch.no_grad()
+    def predict(self, x: torch.Tensor,
+                target_len: Optional[int] = None) -> torch.Tensor:
+        self.eval()
+        orig = self.output_len
+        if target_len is not None:
+            self.output_len = target_len
+        out = self.forward(x)
+        self.output_len = orig
+        return out
+
+
+# ── Transformer CC Classifier-Regressor ──────────────────────────────────────
+
+class TransformerCCClassifierRegressor(nn.Module):
+    """
+    CC loop model consistent with the Transformer model stack.
+    Mirrors CCClassifierRegressor interface.
+
+    Shared trunk  : last timestep of [SP, PV] → Linear → ReLU → Dropout
+    Classifier    : Linear(hidden→1)  logit for pump on/off
+    Regressor     : Linear(hidden→1)  pump speed
+    """
+
+    def __init__(self, n_inputs: int = 2, hidden: int = 32, dropout: float = 0.1):
+        super().__init__()
+        self.trunk = nn.Sequential(
+            nn.Linear(n_inputs, hidden),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+        )
+        self.classifier = nn.Linear(hidden, 1)
+        self.regressor  = nn.Linear(hidden, 1)
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if x.dim() == 3:
+            x = x[:, -1, :]
+        h = self.trunk(x)
+        return self.classifier(h), self.regressor(h)
+
+    @torch.no_grad()
+    def predict(self, x: torch.Tensor,
+                threshold: float = 0.5) -> tuple[torch.Tensor, torch.Tensor]:
+        self.eval()
+        logit, speed = self.forward(x)
+        pump_on = torch.sigmoid(logit) > threshold
+        pump_cv = pump_on.float() * speed
+        return pump_on.squeeze(-1), pump_cv

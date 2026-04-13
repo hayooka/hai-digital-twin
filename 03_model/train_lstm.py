@@ -2,7 +2,7 @@
 train_lstm.py — Train the complete HAI Digital Twin (LSTM plant variant).
 
 Per-epoch training order:
-    1. Controllers (PC, LC, FC, TC) — GRUController × 4, MSE loss on CV sequence
+    1. Controllers (PC, LC, FC, TC) — LSTMController × 4, MSE loss on CV sequence
     2. CC Classifier-Regressor       — BCE (pump on/off) + MSE (speed) combined loss
     3. LSTMPlant                     — scheduled-sampling MSE on PV
 
@@ -11,9 +11,9 @@ Validation (per epoch):
 
 Post-training:
     Closed-loop rollout over val windows (target_len horizon):
-        1. Run each GRUController on input window  →  predicted CV sequence
+        1. Run each LSTMController on input window  →  predicted CV sequence
         2. Patch x_cv_target with predicted CVs
-        3. Run LSTMPlant autoregressively          →  PV sequence
+        3. Run LSTMPlant autoregressively           →  PV sequence
     Compute NRMSE per PV channel.
 
 Run:
@@ -33,8 +33,7 @@ sys.path.insert(0, str(ROOT / "02_data_pipeline"))
 sys.path.insert(0, str(ROOT / "03_model"))
 
 from pipeline import load_and_prepare_data
-from lstm import LSTMPlant
-from gru import GRUController, CCClassifierRegressor
+from lstm import LSTMPlant, LSTMController, LSTMCCClassifierRegressor
 from config import LOOPS, PV_COLS
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -125,7 +124,7 @@ plant_model = LSTMPlant(
 ).to(device)
 
 ctrl_models = {
-    ln: GRUController(
+    ln: LSTMController(
         n_inputs    = ctrl_data[ln]['X_train'].shape[-1],  # 2 = [SP, PV]
         hidden      = CTRL_HIDDEN,
         layers      = CTRL_LAYERS,
@@ -135,7 +134,7 @@ ctrl_models = {
     for ln in CTRL_LOOPS
 }
 
-cc_model = CCClassifierRegressor(
+cc_model = LSTMCCClassifierRegressor(
     n_inputs=2, hidden=CC_HIDDEN, dropout=DROPOUT
 ).to(device)
 
@@ -163,7 +162,7 @@ def ss_ratio_for(epoch: int) -> float:
 
 
 def train_controllers(ss: float) -> dict:
-    """One shuffled pass over training data for all four GRUControllers."""
+    """One shuffled pass over training data for all four LSTMControllers."""
     for m in ctrl_models.values(): m.train()
     N_ctrl = len(ctrl_data['PC']['X_train'])
     idx    = np.random.permutation(N_ctrl)
@@ -343,7 +342,7 @@ print(f"\n  Best plant val loss: {best_plant_val:.5f}")
 
 # ── 5. Closed-loop validation (target_len-step horizon) ───────────────────────
 # Strategy:
-#   1. Run each GRUController on its val input window → predicted CV sequence
+#   1. Run each LSTMController on its val input window → predicted CV sequence
 #   2. Patch x_cv_target with predicted CVs (replacing true CVs)
 #   3. Run LSTMPlant autoregressively → predicted PV sequence
 #   4. Compute NRMSE vs true PV target
@@ -426,8 +425,8 @@ for ln, m in ctrl_models.items():
         "n_inputs":    ctrl_data[ln]['X_train'].shape[-1],
         "hidden":      CTRL_HIDDEN,
         "layers":      CTRL_LAYERS,
-    }, OUT_DIR / f"gru_ctrl_{ln.lower()}.pt")
-    print(f"  Saved: gru_ctrl_{ln.lower()}.pt")
+    }, OUT_DIR / f"lstm_ctrl_{ln.lower()}.pt")
+    print(f"  Saved: lstm_ctrl_{ln.lower()}.pt")
 
 torch.save({
     "model_state": cc_model.state_dict(),
