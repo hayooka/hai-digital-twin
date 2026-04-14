@@ -157,14 +157,16 @@ def load_and_prepare_data(data_dir: Optional[str] = None) -> Dict:
 
     n_plant_in, n_pv = get_plant_input_output_dims(sensor_cols)
 
-    # Controller splits (all five loops, train + val)
+    # Controller splits (all five loops, train + val + test)
     ctrl_data = {}
     for ln in LOOPS:
         X_tr, y_tr, sc_tr   = prepare_controller_data(raw, ln, 'train')
         X_vl, y_vl, sc_vl   = prepare_controller_data(raw, ln, 'val')
+        X_te, y_te, sc_te   = prepare_controller_data(raw, ln, 'test')
         ctrl_data[ln] = {
             'X_train': X_tr, 'y_train': y_tr, 'scenario_train': sc_tr,
             'X_val':   X_vl, 'y_val':   y_vl, 'scenario_val':   sc_vl,
+            'X_test':  X_te, 'y_test':  y_te, 'scenario_test':  sc_te,
         }
 
     return {
@@ -172,12 +174,15 @@ def load_and_prepare_data(data_dir: Optional[str] = None) -> Dict:
             'X_train': x_cv,           'X_cv_target_train': x_cv_tgt,
             'pv_init_train': pv_init,  'pv_teacher_train': pv_teacher,
             'pv_target_train': pv_target, 'scenario_train': sc_train,
+            'attack_train': raw['attack_train'],
             'X_val':   x_cv_val,       'X_cv_target_val': x_cv_tgt_val,
             'pv_init_val': pv_init_val,'pv_teacher_val': pv_teacher_val,
             'pv_target_val': pv_target_val, 'scenario_val': sc_val,
+            'attack_val': raw['attack_val'],
             'X_test':  x_cv_test,      'X_cv_target_test': x_cv_tgt_test,
             'pv_init_test': pv_init_test,'pv_teacher_test': pv_teacher_test,
             'pv_target_test': pv_target_test, 'scenario_test': sc_test,
+            'attack_test': raw['attack_test'],
             'n_plant_in': n_plant_in,
             'n_pv':       n_pv,
         },
