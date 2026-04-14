@@ -27,6 +27,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from pathlib import Path
+import matplotlib
+matplotlib.use("Agg")
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "02_data_pipeline"))
@@ -35,6 +37,7 @@ sys.path.insert(0, str(ROOT / "03_model"))
 from pipeline import load_and_prepare_data
 from lstm import LSTMPlant, LSTMController, LSTMCCClassifierRegressor
 from config import LOOPS, PV_COLS
+from plot_results import plot_training_curves, plot_all_horizons
 
 # ── Config ────────────────────────────────────────────────────────────────────
 SEED        = 42
@@ -107,8 +110,6 @@ print(f"  Train       : {X_train.shape}   Val: {X_val.shape}")
 pv_set      = set(PV_COLS)
 non_pv_cols = [c for c in sensor_cols if c not in pv_set]
 col_to_idx  = {c: i for i, c in enumerate(non_pv_cols)}
-pv_col_to_pv_idx = {c: i for i, c in enumerate(PV_COLS)}
-
 CTRL_LOOPS = ['PC', 'LC', 'FC', 'TC']
 # Index of each loop's CV column within x_cv / x_cv_target
 ctrl_cv_col_idx = {ln: col_to_idx[LOOPS[ln].cv]
@@ -258,6 +259,10 @@ best_plant_val   = float("inf")
 best_plant_state = plant_model.state_dict()
 patience_counter = 0
 
+train_losses: list[float] = []
+val_losses:   list[float] = []
+ss_ratios:    list[float] = []
+
 for epoch in range(1, EPOCHS + 1):
     ss = ss_ratio_for(epoch)
 
@@ -310,6 +315,10 @@ for epoch in range(1, EPOCHS + 1):
     pval /= max(1, n_b)
     plant_sch.step(pval)
 
+    train_losses.append(plant_total / max(1, N // BATCH))
+    val_losses.append(pval)
+    ss_ratios.append(ss)
+
     if pval < best_plant_val:
         best_plant_val   = pval
         best_plant_state = {k: v.clone() for k, v in plant_model.state_dict().items()}
@@ -339,6 +348,13 @@ for epoch in range(1, EPOCHS + 1):
 
 plant_model.load_state_dict(best_plant_state)
 print(f"\n  Best plant val loss: {best_plant_val:.5f}")
+
+# ── Plot 1: Training loss curves ──────────────────────────────────────────────
+plot_training_curves(
+    train_losses, val_losses, ss_ratios,
+    model_name="LSTM",
+    save_path=OUT_DIR / "lstm_loss_curves.png",
+)
 
 # ── 5. Closed-loop validation (target_len-step horizon) ───────────────────────
 # Strategy:
@@ -401,12 +417,14 @@ results = {
     "nrmse_per_pv": {name: float(v) for name, v in zip(PV_COLS, nrmse)},
     "mean_nrmse": float(np.mean(nrmse)),
     "best_val_loss": float(best_plant_val),
+    "train_losses": [float(x) for x in train_losses],
+    "val_losses":   [float(x) for x in val_losses],
 }
 with open(OUT_DIR / "results.json", "w") as f:
     json.dump(results, f, indent=2)
 print(f"  Saved: results.json")
 
-# ── 6. Save checkpoints ───────────────────────────────────────────────────────
+# ── 6. Save checkpoints (before plotting so a crash in plots doesn't lose the model) ──
 print(f"\nStep 5: Saving checkpoints to {OUT_DIR}/")
 
 torch.save({
@@ -434,3 +452,23 @@ torch.save({
     "hidden":      CC_HIDDEN,
 }, OUT_DIR / "cc_model.pt")
 print(f"  Saved: cc_model.pt")
+
+# ── Plots 2–5: closed-loop time series for each horizon ───────────────────────
+print("\nStep 6: Generating closed-loop horizon plots...")
+
+HORIZONS = [300, 600, 900, 1800]
+horizon_data: dict = {}
+sample_idx = 0
+
+for H in HORIZONS:
+    steps = min(H, TARGET_LEN)
+    horizon_data[H] = (
+        pv_true[sample_idx, :steps, :],
+        pv_preds[sample_idx, :steps, :],
+    )
+
+plot_all_horizons(
+    horizon_data, PV_COLS,
+    model_name="LSTM",
+    out_dir=OUT_DIR,
+)

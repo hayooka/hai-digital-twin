@@ -16,15 +16,17 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-# ── Hyperparameters ───────────────────────────────────────────────────────────
-D_MODEL  = 256
-N_HEADS  = 8
-N_LAYERS = 4
-FFN_DIM  = 1024
-DROPOUT  = 0.1
-EPOCHS   = 50
-BATCH    = 64
-LR       = 1e-4
+# ── Legacy hyperparameters (used only by TransformerSeq2Seq / train.py) ───────
+# TransformerPlant, TransformerController, TransformerCCClassifierRegressor
+# receive their hyperparameters explicitly from train_transformer.py.
+_D_MODEL  = 256
+_N_HEADS  = 8
+_N_LAYERS = 4
+_FFN_DIM  = 1024
+_DROPOUT  = 0.1
+_EPOCHS   = 50
+_BATCH    = 64
+_LR       = 1e-4
 
 Path("outputs").mkdir(exist_ok=True)
 
@@ -154,7 +156,7 @@ class TransformerSeq2Seq(nn.Module):
 # ── Training loop ─────────────────────────────────────────────────────────────
 
 def train(model, X_tr, Y_tr, X_v, Y_v,
-          epochs=EPOCHS, batch=BATCH, lr=LR):
+          epochs=_EPOCHS, batch=_BATCH, lr=_LR):
     device = next(model.parameters()).device
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -209,7 +211,7 @@ def train(model, X_tr, Y_tr, X_v, Y_v,
 
 # ── Evaluation ────────────────────────────────────────────────────────────────
 
-def make_predict_fn(model, batch_size=BATCH):
+def make_predict_fn(model, batch_size=_BATCH):
     """
     Wrap a trained model into the predict_fn(X, Y) → Y_pred interface
     expected by evaluate_twin() in utils/eval.py.
@@ -429,6 +431,18 @@ class TransformerController(nn.Module):
         B = x.size(0)
         memory = self.encoder(self.pos_enc(self.src_proj(x)))
 
+        # ── Fast parallel path (teacher forcing, no scheduled sampling) ────────
+        # Used during training and open-loop validation — O(1) decoder passes
+        if y_cv_teacher is not None and ss_ratio == 0.0:
+            start   = torch.zeros(B, 1, 1, device=x.device)
+            tgt_in  = torch.cat([start, y_cv_teacher[:, :-1, :]], dim=1)  # (B, T, 1)
+            tgt_emb = self.pos_enc(self.tgt_proj(tgt_in))
+            T       = tgt_in.size(1)
+            mask    = nn.Transformer.generate_square_subsequent_mask(T, device=x.device)
+            out     = self.decoder(tgt_emb, memory, tgt_mask=mask, tgt_is_causal=True)
+            return self.out(out)                                            # (B, T, 1)
+
+        # ── Autoregressive path (inference or scheduled sampling) ─────────────
         prev = torch.zeros(B, 1, 1, device=x.device)
         dec_tokens = [prev]
         outputs = []
@@ -445,8 +459,6 @@ class TransformerController(nn.Module):
                 use_pred = (torch.rand(B, device=x.device) < ss_ratio
                             ).view(B, 1, 1).float()
                 next_tok = use_pred * cv_pred + (1 - use_pred) * y_cv_teacher[:, t:t+1, :]
-            elif y_cv_teacher is not None:
-                next_tok = y_cv_teacher[:, t:t+1, :]
             else:
                 next_tok = cv_pred
             dec_tokens.append(next_tok)
@@ -469,28 +481,40 @@ class TransformerController(nn.Module):
 
 class TransformerCCClassifierRegressor(nn.Module):
     """
-    CC loop model consistent with the Transformer model stack.
-    Mirrors CCClassifierRegressor interface.
+    CC loop model — full Transformer encoder over [SP, PV] history.
 
-    Shared trunk  : last timestep of [SP, PV] → Linear → ReLU → Dropout
-    Classifier    : Linear(hidden→1)  logit for pump on/off
-    Regressor     : Linear(hidden→1)  pump speed
+    Replaces the previous single-timestep MLP with a proper sequence encoder
+    so the pump on/off decision and speed regression use the full 300-step
+    context, consistent with the rest of the Transformer model stack.
+
+    Architecture:
+        Input projection : (B, T, n_inputs) → (B, T, d_model)
+        Positional enc   : adds position info
+        TransformerEncoder (n_layers)
+        Pooling          : last token → (B, d_model)
+        Classifier head  : Linear → 1 logit  (pump on/off, BCE loss)
+        Regressor head   : Linear → 1 value  (pump speed, MSE loss on pump-on samples)
     """
 
-    def __init__(self, n_inputs: int = 2, hidden: int = 32, dropout: float = 0.1):
+    def __init__(self, n_inputs: int = 2, d_model: int = 32, n_heads: int = 4,
+                 n_layers: int = 2, dropout: float = 0.1):
         super().__init__()
-        self.trunk = nn.Sequential(
-            nn.Linear(n_inputs, hidden),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-        )
-        self.classifier = nn.Linear(hidden, 1)
-        self.regressor  = nn.Linear(hidden, 1)
+        self.proj    = nn.Linear(n_inputs, d_model)
+        self.pos_enc = PositionalEncoding(d_model, dropout=dropout)
+        enc_layer    = nn.TransformerEncoderLayer(
+            d_model, n_heads, d_model * 4, dropout,
+            batch_first=True, norm_first=True)
+        self.encoder    = nn.TransformerEncoder(enc_layer, n_layers,
+                                                enable_nested_tensor=False)
+        self.classifier = nn.Linear(d_model, 1)
+        self.regressor  = nn.Linear(d_model, 1)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        if x.dim() == 3:
-            x = x[:, -1, :]
-        h = self.trunk(x)
+        if x.dim() == 2:                      # (B, n_inputs) → add time dim
+            x = x.unsqueeze(1)
+        h = self.pos_enc(self.proj(x))        # (B, T, d_model)
+        h = self.encoder(h)                   # (B, T, d_model)
+        h = h[:, -1, :]                       # last token  (B, d_model)
         return self.classifier(h), self.regressor(h)
 
     @torch.no_grad()

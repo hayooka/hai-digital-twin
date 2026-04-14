@@ -27,6 +27,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 from pathlib import Path
+import matplotlib
+matplotlib.use("Agg")
+from sklearn.metrics import roc_auc_score, f1_score, precision_recall_curve
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "02_data_pipeline"))
@@ -35,6 +38,7 @@ sys.path.insert(0, str(ROOT / "03_model"))
 from pipeline import load_and_prepare_data
 from transformer import TransformerPlant, TransformerController, TransformerCCClassifierRegressor
 from config import LOOPS, PV_COLS
+from plot_results import plot_training_curves, plot_all_horizons
 
 # ── Config ────────────────────────────────────────────────────────────────────
 SEED        = 42
@@ -47,19 +51,21 @@ DROPOUT     = 0.1
 # Controller
 CTRL_HIDDEN = 64
 CTRL_LAYERS = 2
-# CC
-CC_HIDDEN   = 32
+# CC (now a real Transformer encoder — d_model must be divisible by n_heads)
+CC_HIDDEN   = 32   # d_model for CC encoder
+CC_HEADS    = 4    # attention heads  (32 / 4 = 8 per head)
+CC_LAYERS   = 2
 # Training
 EPOCHS      = 150
-BATCH       = 64      # smaller batch: Transformer uses more memory
-LR          = 1e-4    # lower LR typical for Transformers
+BATCH       = 128
+LR          = 1e-3
 CTRL_LR     = 1e-3
 WD          = 1e-5
 GRAD_CLIP   = 1.0
 SCH_PAT     = 5
 SCH_FAC     = 0.5
 PATIENCE    = 15      # early stopping: epochs without val improvement
-# Scheduled sampling — SS_MAX=0.0 keeps the fast parallel decoder path always
+# Scheduled sampling — ramps from 0 → SS_MAX over [SS_START, SS_END] epochs
 SS_START    = 10
 SS_END      = 40
 SS_MAX      = 0.5
@@ -93,6 +99,13 @@ pv_init_val    = plant_data['pv_init_val']
 pv_teacher_val = plant_data['pv_teacher_val']
 pv_target_val  = plant_data['pv_target_val']
 scenario_val   = plant_data['scenario_val']
+
+X_test         = plant_data['X_test']
+X_cv_tgt_test  = plant_data['X_cv_target_test']
+pv_init_test   = plant_data['pv_init_test']
+pv_target_test = plant_data['pv_target_test']
+scenario_test  = plant_data['scenario_test']
+attack_test    = plant_data['attack_test']      # binary: 1 = attack in target window
 
 N_PLANT_IN  = plant_data['n_plant_in']
 N_PV        = plant_data['n_pv']
@@ -139,7 +152,8 @@ ctrl_models = {
 }
 
 cc_model = TransformerCCClassifierRegressor(
-    n_inputs=2, hidden=CC_HIDDEN, dropout=DROPOUT
+    n_inputs=2, d_model=CC_HIDDEN, n_heads=CC_HEADS,
+    n_layers=CC_LAYERS, dropout=DROPOUT,
 ).to(device)
 
 print(f"  TransformerPlant: {sum(p.numel() for p in plant_model.parameters()):,}")
@@ -234,11 +248,27 @@ def val_cc() -> float:
     return (loss_cls + loss_reg).item()
 
 
-# ── 4. Training loop ──────────────────────────────────────────────────────────
+# ── 4. Weighted sampler — address severe scenario class imbalance ─────────────
+# Train scenario counts: normal ~10k, AP_no ~98, AP_with ~20, AE_no ~16
+# Without weighting, attack scenarios almost never appear in a batch.
+_scenario_counts = np.bincount(scenario_train, minlength=N_SCENARIOS).astype(float)
+_class_weights   = 1.0 / np.maximum(_scenario_counts, 1)
+_sample_weights  = _class_weights[scenario_train]
+_sample_weights /= _sample_weights.sum()   # normalise to a probability distribution
+
+print(f"\n  Scenario class weights (inverse freq):")
+for sc_idx, (cnt, w) in enumerate(zip(_scenario_counts, _class_weights)):
+    print(f"    class {sc_idx}: {int(cnt):5d} samples → weight {w:.4f}")
+
+# ── 5. Training loop ──────────────────────────────────────────────────────────
 print(f"\nStep 3: Training for {EPOCHS} epochs...")
 best_plant_val   = float("inf")
 best_plant_state = plant_model.state_dict()
 patience_counter = 0
+
+train_losses: list[float] = []
+val_losses:   list[float] = []
+ss_ratios:    list[float] = []
 
 for epoch in range(1, EPOCHS + 1):
     ss = ss_ratio_for(epoch)
@@ -247,7 +277,8 @@ for epoch in range(1, EPOCHS + 1):
     cc_train    = train_cc()
 
     plant_model.train()
-    idx         = np.random.permutation(N)
+    # Weighted sampling with replacement so each batch has balanced scenarios
+    idx         = np.random.choice(N, size=N, replace=True, p=_sample_weights)
     plant_total = 0.0
     for i in range(0, N, BATCH):
         b = idx[i:i + BATCH]
@@ -284,6 +315,10 @@ for epoch in range(1, EPOCHS + 1):
     pval /= max(1, n_b)
     plant_sch.step(pval)
 
+    train_losses.append(plant_total / max(1, N // BATCH))
+    val_losses.append(pval)
+    ss_ratios.append(ss)
+
     if pval < best_plant_val:
         best_plant_val   = pval
         best_plant_state = {k: v.clone() for k, v in plant_model.state_dict().items()}
@@ -315,10 +350,18 @@ for epoch in range(1, EPOCHS + 1):
 plant_model.load_state_dict(best_plant_state)
 print(f"\n  Best plant val loss: {best_plant_val:.5f}")
 
+# ── Plot 1: Training loss curves ──────────────────────────────────────────────
+plot_training_curves(
+    train_losses, val_losses, ss_ratios,
+    model_name="Transformer",
+    save_path=OUT_DIR / "transformer_loss_curves.png",
+)
+
 # ── 5. Closed-loop validation ─────────────────────────────────────────────────
-print(f"\nStep 4: Closed-loop validation ({TARGET_LEN}-step horizon)...")
+print(f"\nStep 4: Closed-loop validation ({TARGET_LEN}-step / ~{TARGET_LEN//60}-min horizon)...")
 for m in ctrl_models.values(): m.eval()
-cc_model.eval(); plant_model.eval()
+cc_model.eval()
+plant_model.eval()
 
 N_val    = len(X_val)
 pv_preds = np.zeros((N_val, TARGET_LEN, N_PV), dtype=np.float32)
@@ -342,9 +385,10 @@ with torch.no_grad():
         B_actual = pv_seq.size(0)
         pv_preds[i:i + B_actual] = pv_seq.cpu().numpy()
 
-nrmse = []
+pv_true = pv_target_val
+nrmse   = []
 for k in range(N_PV):
-    true_k = pv_target_val[:, :, k]
+    true_k = pv_true[:, :, k]
     pred_k = pv_preds[:, :, k]
     rmse   = np.sqrt(np.mean((pred_k - true_k) ** 2))
     rng    = max(float(true_k.max() - true_k.min()), 1e-6)
@@ -360,12 +404,14 @@ results = {
     "nrmse_per_pv": {name: float(v) for name, v in zip(PV_COLS, nrmse)},
     "mean_nrmse": float(np.mean(nrmse)),
     "best_val_loss": float(best_plant_val),
+    "train_losses": [float(x) for x in train_losses],
+    "val_losses":   [float(x) for x in val_losses],
 }
 with open(OUT_DIR / "results.json", "w") as f:
     json.dump(results, f, indent=2)
 print(f"  Saved: results.json")
 
-# ── 6. Save checkpoints ───────────────────────────────────────────────────────
+# ── 6. Save checkpoints (before plotting so a crash in plots doesn't lose the model) ──
 print(f"\nStep 5: Saving checkpoints to {OUT_DIR}/")
 
 torch.save({
@@ -391,6 +437,117 @@ for ln, m in ctrl_models.items():
 torch.save({
     "model_state": cc_model.state_dict(),
     "n_inputs":    2,
-    "hidden":      CC_HIDDEN,
+    "d_model":     CC_HIDDEN,
+    "n_heads":     CC_HEADS,
+    "n_layers":    CC_LAYERS,
 }, OUT_DIR / "cc_model.pt")
 print(f"  Saved: cc_model.pt")
+
+# ── Plots 2–5: closed-loop time series for each horizon ───────────────────────
+print("\nStep 6: Generating closed-loop horizon plots...")
+
+HORIZONS = [300, 600, 900, 1800]
+horizon_data: dict = {}
+sample_idx = 0
+
+for H in HORIZONS:
+    steps = min(H, TARGET_LEN)
+    horizon_data[H] = (
+        pv_true[sample_idx, :steps, :],
+        pv_preds[sample_idx, :steps, :],
+    )
+
+plot_all_horizons(
+    horizon_data, PV_COLS,
+    model_name="Transformer",
+    out_dir=OUT_DIR,
+)
+
+# ── 7. Test-set evaluation: NRMSE + Attack detection metrics ──────────────────
+print(f"\nStep 7: Test-set evaluation ({len(X_test)} windows)...")
+for m in ctrl_models.values(): m.eval()
+cc_model.eval()
+plant_model.eval()
+
+N_test      = len(X_test)
+pv_preds_te = np.zeros((N_test, TARGET_LEN, N_PV), dtype=np.float32)
+
+with torch.no_grad():
+    for i in range(0, N_test, BATCH):
+        sl          = slice(i, i + BATCH)
+        x_cv_b      = torch.tensor(X_test[sl]).float().to(device)
+        xct_b       = torch.tensor(X_cv_tgt_test[sl]).float().to(device).clone()
+        pv_init_b   = torch.tensor(pv_init_test[sl]).float().to(device)
+        sc_b        = torch.tensor(scenario_test[sl]).long().to(device)
+
+        for ln in CTRL_LOOPS:
+            if ln not in ctrl_cv_col_idx:
+                continue
+            Xc      = torch.tensor(ctrl_data[ln]['X_test'][sl]).float().to(device)
+            cv_pred = ctrl_models[ln].predict(Xc, target_len=TARGET_LEN)
+            xct_b[:, :, ctrl_cv_col_idx[ln]:ctrl_cv_col_idx[ln] + 1] = cv_pred
+
+        pv_seq   = plant_model.predict(x_cv_b, xct_b, pv_init_b, sc_b)
+        B_actual = pv_seq.size(0)
+        pv_preds_te[i:i + B_actual] = pv_seq.cpu().numpy()
+
+# ── NRMSE on test set (normal windows only, i.e. train4) ─────────────────────
+normal_mask  = (attack_test == 0)
+nrmse_test   = []
+for k in range(N_PV):
+    true_k = pv_target_test[normal_mask, :, k]
+    pred_k = pv_preds_te[normal_mask, :, k]
+    rmse   = np.sqrt(np.mean((pred_k - true_k) ** 2))
+    rng    = max(float(true_k.max() - true_k.min()), 1e-6)
+    nrmse_test.append(rmse / rng)
+
+print("  Test NRMSE (normal windows — causal generalisation):")
+for name, v in zip(PV_COLS, nrmse_test):
+    print(f"    {name:<30s}: {v:.4f}")
+print(f"  Test Mean NRMSE: {np.mean(nrmse_test):.4f}")
+
+# ── Attack detection: use per-window PV reconstruction error as anomaly score ─
+# Higher MSE → prediction error → likely attack in target window
+anomaly_scores = np.mean((pv_preds_te - pv_target_test) ** 2, axis=(1, 2))  # (N_test,)
+
+attack_metrics: dict = {}
+if attack_test.sum() > 0:
+    auroc = roc_auc_score(attack_test, anomaly_scores)
+
+    # F1 at best threshold (sweep over percentiles of the score distribution)
+    thresholds    = np.percentile(anomaly_scores, np.linspace(50, 99, 100))
+    best_f1, best_thresh = 0.0, thresholds[0]
+    for t in thresholds:
+        f1 = f1_score(attack_test, anomaly_scores > t, zero_division=0)
+        if f1 > best_f1:
+            best_f1, best_thresh = f1, t
+
+    # Precision / recall at best-F1 threshold
+    prec_arr, rec_arr, _ = precision_recall_curve(attack_test, anomaly_scores)
+    avg_prec = float(np.mean(prec_arr))
+
+    attack_metrics = {
+        "auroc":             float(auroc),
+        "best_f1":           float(best_f1),
+        "best_threshold":    float(best_thresh),
+        "avg_precision":     avg_prec,
+        "n_attack_windows":  int(attack_test.sum()),
+        "n_normal_windows":  int((attack_test == 0).sum()),
+    }
+    print(f"\n  Attack detection metrics (anomaly score = PV reconstruction MSE):")
+    print(f"    AUROC          : {auroc:.4f}")
+    print(f"    Best F1        : {best_f1:.4f}  (threshold={best_thresh:.5f})")
+    print(f"    Avg Precision  : {avg_prec:.4f}")
+    print(f"    Attack windows : {attack_metrics['n_attack_windows']} / {N_test}")
+else:
+    print("  WARNING: No attack windows in test set — skipping attack metrics.")
+
+# ── Save updated results ──────────────────────────────────────────────────────
+results.update({
+    "test_nrmse_per_pv":  {name: float(v) for name, v in zip(PV_COLS, nrmse_test)},
+    "test_mean_nrmse":    float(np.mean(nrmse_test)),
+    "attack_detection":   attack_metrics,
+})
+with open(OUT_DIR / "results.json", "w") as f:
+    json.dump(results, f, indent=2)
+print(f"\n  Results updated: results.json")
