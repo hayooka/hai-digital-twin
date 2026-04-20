@@ -89,6 +89,62 @@ class GRUController(nn.Module):
         return out
 
 
+# ── LSTM Controller ───────────────────────────────────────────────────────────
+
+class LSTMController(nn.Module):
+    """
+    Identical interface to GRUController but uses LSTM cells.
+    LSTM's cell state gives it longer memory — useful for slow dynamics (PC, LC).
+    """
+
+    def __init__(self, n_inputs: int = 2, hidden: int = 64,
+                 layers: int = 2, dropout: float = 0.1, output_len: int = 180):
+        super().__init__()
+        self.output_len = output_len
+        drop = dropout if layers > 1 else 0.0
+
+        self.encoder = nn.LSTM(n_inputs, hidden, layers,
+                               batch_first=True, dropout=drop)
+        self.decoder = nn.LSTM(1, hidden, layers,
+                               batch_first=True, dropout=drop)
+        self.out = nn.Linear(hidden, 1)
+
+    def forward(self, x: torch.Tensor,
+                y_cv_teacher: Optional[torch.Tensor] = None,
+                ss_ratio: float = 0.0) -> torch.Tensor:
+        B = x.size(0)
+        _, (h, c) = self.encoder(x)
+        prev = torch.zeros(B, 1, 1, device=x.device)
+        outputs = []
+
+        for t in range(self.output_len):
+            out, (h, c) = self.decoder(prev, (h, c))
+            cv_pred = self.out(out)
+            outputs.append(cv_pred)
+
+            if y_cv_teacher is not None and ss_ratio > 0.0:
+                use_pred = (torch.rand(B, device=x.device) < ss_ratio
+                            ).view(B, 1, 1).float()
+                prev = use_pred * cv_pred + (1 - use_pred) * y_cv_teacher[:, t:t+1, :]
+            elif y_cv_teacher is not None:
+                prev = y_cv_teacher[:, t:t+1, :]
+            else:
+                prev = cv_pred
+
+        return torch.cat(outputs, dim=1)
+
+    @torch.no_grad()
+    def predict(self, x: torch.Tensor,
+                target_len: Optional[int] = None) -> torch.Tensor:
+        self.eval()
+        orig = self.output_len
+        if target_len is not None:
+            self.output_len = target_len
+        out = self.forward(x)
+        self.output_len = orig
+        return out
+
+
 # ── CC Classifier-Regressor ───────────────────────────────────────────────────
 
 class CCClassifierRegressor(nn.Module):
@@ -136,6 +192,82 @@ class CCClassifierRegressor(nn.Module):
         return pump_on.squeeze(-1), pump_cv
 
 
+# ── CC Sequence Model (full history + two-head output) ───────────────────────
+
+class CCSequenceModel(nn.Module):
+    """
+    CC loop model with full sequence history and two-head output.
+
+    Inputs  : [SP, PV, CV, TIT03] over input_len steps  (n_inputs=4)
+    Encoder : GRU over full sequence → hidden state
+    Decoder : autoregressive, two heads per step:
+                - on/off logit  (BCE auxiliary loss — helps learn transitions)
+                - cv_value      (MSE loss — predicts full CV in normalised space)
+
+    NOTE: cv_value predicts the full normalised CV directly (including zeros).
+          BCE is auxiliary only — not used to mask output at inference.
+          This avoids normalisation mismatch (0 in raw ≠ 0 in normalised space).
+    """
+
+    def __init__(self, n_inputs: int = 4, hidden: int = 64,
+                 layers: int = 2, dropout: float = 0.1,
+                 output_len: int = 180):
+        super().__init__()
+        self.output_len = output_len
+        drop = dropout if layers > 1 else 0.0
+
+        self.encoder  = nn.GRU(n_inputs, hidden, layers,
+                               batch_first=True, dropout=drop)
+        self.decoder  = nn.GRU(1, hidden, layers,
+                               batch_first=True, dropout=drop)
+        self.head_on  = nn.Linear(hidden, 1)   # on/off logit (auxiliary)
+        self.head_cv  = nn.Linear(hidden, 1)   # CV value in normalised space
+
+    def forward(self, x: torch.Tensor,
+                y_teacher: Optional[torch.Tensor] = None,
+                ss_ratio: float = 0.0
+                ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        x:         (B, input_len, n_inputs)
+        y_teacher: (B, target_len, 1)  true CV for teacher forcing
+        → logits (B, target_len, 1),  cv_preds (B, target_len, 1)
+        """
+        B = x.size(0)
+        _, h = self.encoder(x)
+        prev = torch.zeros(B, 1, 1, device=x.device)
+        logits, cv_preds = [], []
+
+        for t in range(self.output_len):
+            out, h  = self.decoder(prev, h)
+            logit   = self.head_on(out)    # (B, 1, 1)
+            cv_pred = self.head_cv(out)    # (B, 1, 1)
+            logits.append(logit)
+            cv_preds.append(cv_pred)
+
+            if y_teacher is not None and ss_ratio > 0.0:
+                use_pred = (torch.rand(B, device=x.device) < ss_ratio
+                            ).view(B, 1, 1).float()
+                prev = use_pred * cv_pred + (1 - use_pred) * y_teacher[:, t:t+1, :]
+            elif y_teacher is not None:
+                prev = y_teacher[:, t:t+1, :]
+            else:
+                prev = cv_pred
+
+        return torch.cat(logits, dim=1), torch.cat(cv_preds, dim=1)
+
+    @torch.no_grad()
+    def predict(self, x: torch.Tensor,
+                target_len: Optional[int] = None) -> torch.Tensor:
+        """Returns predicted CV sequence (B, output_len, 1) in normalised space."""
+        self.eval()
+        orig = self.output_len
+        if target_len is not None:
+            self.output_len = target_len
+        _, cv_preds = self.forward(x)
+        self.output_len = orig
+        return cv_preds
+
+
 # ── GRU Plant (MIMO, autoregressive, scheduled sampling) ─────────────────────
 
 class GRUPlant(nn.Module):
@@ -160,11 +292,13 @@ class GRUPlant(nn.Module):
     def __init__(self, n_plant_in: int, n_pv: int,
                  hidden: int = 256, layers: int = 2,
                  n_scenarios: int = 4, emb_dim: int = 32,
-                 dropout: float = 0.1):
+                 dropout: float = 0.1,
+                 scenario_heads: bool = False):
         super().__init__()
-        self.n_plant_in  = n_plant_in
-        self.n_pv        = n_pv
-        self.n_scenarios = n_scenarios
+        self.n_plant_in     = n_plant_in
+        self.n_pv           = n_pv
+        self.n_scenarios    = n_scenarios
+        self.scenario_heads = scenario_heads
         drop = dropout if layers > 1 else 0.0
 
         self.scenario_emb = nn.Embedding(n_scenarios, emb_dim)
@@ -173,12 +307,21 @@ class GRUPlant(nn.Module):
                               batch_first=True, dropout=drop)
         self.decoder = nn.GRU(n_plant_in + n_pv, hidden, layers,
                               batch_first=True, dropout=drop)
-        self.fc = nn.Sequential(
-            nn.Linear(hidden, 128),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(128, n_pv),
-        )
+
+        if scenario_heads:
+            self.fc_heads = nn.ModuleList([
+                nn.Sequential(
+                    nn.Linear(hidden, 128), nn.ReLU(),
+                    nn.Dropout(dropout), nn.Linear(128, n_pv),
+                ) for _ in range(n_scenarios)
+            ])
+        else:
+            self.fc = nn.Sequential(
+                nn.Linear(hidden, 128),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(128, n_pv),
+            )
 
     def forward(self, x_cv: torch.Tensor, x_cv_target: torch.Tensor,
                 pv_init: torch.Tensor, scenario: torch.Tensor,
@@ -204,8 +347,16 @@ class GRUPlant(nn.Module):
 
         for t in range(T_target):
             dec_in = torch.cat([x_cv_target[:, t, :], pv], dim=-1).unsqueeze(1)
-            out, h = self.decoder(dec_in, h)               # (B, 1, hidden)
-            pv_pred = self.fc(out.squeeze(1))              # (B, n_pv)
+            out, h  = self.decoder(dec_in, h)              # (B, 1, hidden)
+            h_out   = out.squeeze(1)                       # (B, hidden)
+            if self.scenario_heads:
+                pv_pred = torch.zeros(B, self.n_pv, device=x_cv.device)
+                for sc_id in range(self.n_scenarios):
+                    mask = (scenario == sc_id)
+                    if mask.any():
+                        pv_pred[mask] = self.fc_heads[sc_id](h_out[mask])
+            else:
+                pv_pred = self.fc(h_out)
             outputs.append(pv_pred)
 
             if pv_teacher is not None and ss_ratio > 0.0:
