@@ -308,8 +308,8 @@ for epoch in range(1, EPOCHS + 1):
             pv_tf  = torch.tensor(pv_teacher_val[i:i+BATCH]).float().to(device)
             pv_tgt = torch.tensor(pv_target_val[i:i+BATCH]).float().to(device)
             sc     = torch.tensor(scenario_val[i:i+BATCH]).long().to(device)
-            pval  += mse(plant_model(x_cv, x_cv_t, pv_ini, sc,
-                                     pv_teacher=pv_tf, ss_ratio=0.0), pv_tgt).item()
+            pval  += weighted_mse(plant_model(x_cv, x_cv_t, pv_ini, sc,
+                                     pv_teacher=pv_tf, ss_ratio=0.0), pv_tgt, sc).item()
             n_b   += 1
 
     pval /= max(1, n_b)

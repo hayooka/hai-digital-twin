@@ -39,7 +39,7 @@
       "3": 2.0
     },
     "TIT03_LOSS_WEIGHT": 2.0,
-    "warmstart": "c:\\Users\\ahmma\\Desktop\\farah\\hai-digital-twin\\outputs\\gru_causal_plus_added\\gru_plant.pt"
+    "warmstart": "C:\\Users\\ahmma\\Desktop\\farah\\hai-digital-twin\\outputs\\pipeline\\gru_causal_plus_tuned\\gru_plant.pt"
   },
   "best_val_loss": 0.0003102514525855203,
   "test_nrmse_per_pv": {
