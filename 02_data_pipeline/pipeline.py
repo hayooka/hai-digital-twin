@@ -106,14 +106,14 @@ def prepare_controller_data(raw: Dict, loop_name: str, split: str = 'train') -> 
 
     if not (sp_idx and pv_idx and cv_idx):
         return (
-            np.empty((0, X.shape[1], 2), dtype=np.float32),
+            np.empty((0, X.shape[1], 3), dtype=np.float32),
             np.empty((0, y.shape[1], 1), dtype=np.float32),
             scenario[:0],
         )
 
-    # Extract from plant-scaled windows
-    X_ctrl = X[:, :, sp_idx + pv_idx]   # (N, input_len, 2)
-    y_ctrl = y[:, :, cv_idx]            # (N, target_len, 1)
+    # Extract from plant-scaled windows: [SP, PV, CV] (3 channels)
+    X_ctrl = X[:, :, sp_idx + pv_idx + cv_idx]   # (N, input_len, 3)
+    y_ctrl = y[:, :, cv_idx]                      # (N, target_len, 1)
 
     # Re-scale to per-loop controller space:
     #   1. Inverse plant scaler  →  raw sensor values
@@ -121,11 +121,11 @@ def prepare_controller_data(raw: Dict, loop_name: str, split: str = 'train') -> 
     plant_scaler = raw.get('plant_scaler')
     ctrl_info    = raw.get('ctrl_scalers', {}).get(loop_name)
     if plant_scaler is not None and ctrl_info is not None:
-        cs          = ctrl_info['scaler']
-        pm, ps      = plant_scaler.mean_, plant_scaler.scale_
-        sp_pv_idx   = sp_idx + pv_idx
-        X_ctrl = (X_ctrl * ps[sp_pv_idx] + pm[sp_pv_idx] - cs.mean_[:2]) / cs.scale_[:2]
-        y_ctrl = (y_ctrl * ps[cv_idx]    + pm[cv_idx]    - cs.mean_[2:]) / cs.scale_[2:]
+        cs             = ctrl_info['scaler']
+        pm, ps         = plant_scaler.mean_, plant_scaler.scale_
+        sp_pv_cv_idx   = sp_idx + pv_idx + cv_idx
+        X_ctrl = (X_ctrl * ps[sp_pv_cv_idx] + pm[sp_pv_cv_idx] - cs.mean_[:3]) / cs.scale_[:3]
+        y_ctrl = (y_ctrl * ps[cv_idx]        + pm[cv_idx]        - cs.mean_[2:]) / cs.scale_[2:]
 
     return X_ctrl, y_ctrl, scenario
 
