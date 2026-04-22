@@ -12,6 +12,7 @@ data/splits/
 # Large binary arrays
 *.npy
 *.npz
+*.zip
 
 # Model checkpoints
 *.pt

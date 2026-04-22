@@ -1,8 +1,8 @@
 """
 plot_utils.py — Paper plots for GRU-Scenario-Weighted Digital Twin
 Includes: loss curves, NRMSE bars, per-loop performance, scenario NRMSE,
-error growth, heatmap, ROC/PR curves, residual analysis, confusion matrix,
-detection rates, and scenario overlays.
+error growth (via window chaining), heatmap, ROC/PR curves, residual analysis,
+confusion matrix, detection rates, and scenario overlays.
 """
 
 from __future__ import annotations
@@ -50,6 +50,9 @@ TARGET_LEN = 180
 NRMSE_THRESHOLD = 0.10
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# Global cache for chained rollout
+_CHAIN_CACHE = {}
+
 
 # ── Helper Functions ────────────────────────────────────────────────────────────────
 
@@ -90,47 +93,209 @@ def compute_nrmse_per_scenario(pv_true, pv_preds, scenario_labels) -> Dict[int, 
     return result
 
 
-def compute_error_growth(
-    pv_true: np.ndarray,
-    pv_preds: np.ndarray,
+def run_autoregressive_chain(
+    plant_model,
+    ctrl_models: Dict[str, Any],
+    data: Dict,
+    split: str,
+    start_idx: int,
+    n_windows: int,
+    device: torch.device,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Open-loop autoregressive rollout across n_windows consecutive windows.
+
+    The plant encoder runs ONCE on window start_idx. The decoder then rolls out
+    for n_windows * target_len steps without ever resetting to ground-truth PVs.
+    """
+    plant_data = data["plant"]
+    ctrl_data = data["ctrl"]
+    target_len = data["metadata"]["target_len"]
+    n_pv = plant_data["n_pv"]
+
+    X = plant_data[f"X_{split}"]
+    X_cv_tgt = plant_data[f"X_cv_target_{split}"]
+    pv_target_arr = plant_data[f"pv_target_{split}"]
+    scenario_arr = plant_data[f"scenario_{split}"]
+
+    # Map CV indices
+    non_pv_cols = [c for c in data["metadata"]["sensor_cols"] if c not in set(PV_COLS)]
+    col_to_idx = {c: i for i, c in enumerate(non_pv_cols)}
+    ctrl_cv_col_idx = {
+        ln: col_to_idx[LOOPS[ln].cv]
+        for ln in CTRL_LOOPS
+        if LOOPS[ln].cv in col_to_idx
+    }
+
+    plant_model.eval()
+    for m in ctrl_models.values():
+        m.eval()
+
+    true_parts: List[np.ndarray] = []
+    pred_parts: List[np.ndarray] = []
+
+    with torch.no_grad():
+        # Encode once from the first window
+        x_cv_0 = torch.tensor(X[start_idx:start_idx + 1]).float().to(device)
+        sc_0 = torch.tensor(scenario_arr[start_idx:start_idx + 1]).long().to(device)
+        
+        # Get initial PV state (first timestep of first window)
+        pv_prev = torch.tensor(pv_target_arr[start_idx:start_idx + 1, 0, :]).float().to(device)
+
+        emb = plant_model.scenario_emb(sc_0).unsqueeze(1).expand(-1, x_cv_0.size(1), -1)
+        _, h = plant_model.encoder(torch.cat([x_cv_0, emb], dim=-1))
+
+        # Decode autoregressively across n_windows
+        for w in range(n_windows):
+            idx = start_idx + w
+            if idx >= len(X):
+                break
+
+            # Store ground truth for this entire window
+            true_parts.append(pv_target_arr[idx])  # Shape: (target_len, n_pv)
+
+            # Controller CV predictions for this window
+            xct_w = torch.tensor(X_cv_tgt[idx:idx + 1]).float().to(device).clone()
+            sc_w = torch.tensor(scenario_arr[idx:idx + 1]).long().to(device)
+
+            for ln in CTRL_LOOPS:
+                if ln not in ctrl_cv_col_idx:
+                    continue
+                if f"X_{split}" not in ctrl_data.get(ln, {}):
+                    continue
+                Xc = torch.tensor(
+                    ctrl_data[ln][f"X_{split}"][idx:idx + 1]
+                ).float().to(device)
+                cv_pred = ctrl_models[ln].predict(Xc, target_len=target_len)
+                if cv_pred.dim() == 2:
+                    cv_pred = cv_pred.unsqueeze(-1)
+                cv_i = ctrl_cv_col_idx[ln]
+                if cv_i < xct_w.shape[2]:
+                    xct_w[:, :, cv_i:cv_i + 1] = cv_pred
+
+            # Step-by-step decoder for this window
+            win_preds: List[torch.Tensor] = []
+            for t in range(target_len):
+                dec_in = torch.cat([xct_w[:, t, :], pv_prev], dim=-1).unsqueeze(1)
+                out, h = plant_model.decoder(dec_in, h)
+                h_out = out.squeeze(1)
+
+                if getattr(plant_model, "scenario_heads", False):
+                    pv_pred = torch.zeros(1, n_pv, device=device)
+                    for sc_id in range(plant_model.n_scenarios):
+                        mask = (sc_w == sc_id)
+                        if mask.any():
+                            pv_pred[mask] = plant_model.fc_heads[sc_id](h_out[mask])
+                else:
+                    pv_pred = plant_model.fc(h_out)
+
+                win_preds.append(pv_pred)
+                pv_prev = pv_pred  # Carry predicted PV to next timestep
+
+            # Stack predictions for this window: (target_len, n_pv)
+            pred_window = torch.stack(win_preds, dim=1).squeeze(0).cpu().numpy()
+            pred_parts.append(pred_window)
+
+    # Concatenate along time axis (all windows)
+    true_chain = np.concatenate(true_parts, axis=0)  # Shape: (n_windows * target_len, n_pv)
+    pred_chain = np.concatenate(pred_parts, axis=0)  # Shape: (n_windows * target_len, n_pv)
+
+    return true_chain, pred_chain
+
+
+def get_chained_rollout(
+    plant_model,
+    ctrl_models: Dict[str, Any],
+    data: Dict,
+    device: torch.device,
+    split: str = "test",
+    max_windows: int = 30,
+    force_recompute: bool = False
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Get chained rollout (cached to avoid recomputation between plots 6 and 7).
+    """
+    cache_key = f"{split}_{max_windows}"
+    
+    if not force_recompute and cache_key in _CHAIN_CACHE:
+        logger.info("Using cached chained rollout")
+        return _CHAIN_CACHE[cache_key]
+    
+    # Get a representative start window (median-variance normal window)
+    scenario_labels = data["plant"]["scenario_val"] if split == "val" else data["plant"]["scenario_test"]
+    normal_indices = np.where(scenario_labels == 0)[0]
+    
+    if len(normal_indices) > 0:
+        # Calculate variance for each normal window to pick a representative one
+        pv_target = data["plant"]["pv_target_val"] if split == "val" else data["plant"]["pv_target_test"]
+        variances = [np.var(pv_target[idx]) for idx in normal_indices]
+        median_idx = np.argsort(variances)[len(variances)//2]
+        start_idx = normal_indices[median_idx]
+        logger.info(f"Selected start window {start_idx} (median variance among {len(normal_indices)} normal windows)")
+    else:
+        start_idx = 0
+        logger.warning("No normal windows found, using start_idx=0")
+    
+    logger.info(f"Running chained rollout from window {start_idx}, {max_windows} windows...")
+    
+    true_chain, pred_chain = run_autoregressive_chain(
+        plant_model, ctrl_models, data, split, start_idx, max_windows, device
+    )
+    
+    logger.info(f"Chained rollout complete: {len(true_chain)} steps, shape: {true_chain.shape}")
+    
+    _CHAIN_CACHE[cache_key] = (true_chain, pred_chain)
+    return true_chain, pred_chain
+
+
+def compute_error_growth_chained(
+    plant_model,
+    ctrl_models: Dict[str, Any],
+    data: Dict,
+    device: torch.device,
+    split: str = "test",
+    max_windows: int = 30,
     horizons: List[int] = None
 ) -> Dict[int, Dict[str, float]]:
     """
-    Compute NRMSE at multiple prediction horizons.
-    
-    Args:
-        pv_true: Ground truth (N, T, 5)
-        pv_preds: Predictions (N, T, 5)
-        horizons: List of horizon steps (default: 60,180,300,600,900,1800,3600,5400)
-    
-    Returns:
-        Dict: horizon -> {pv_name: nrmse, 'overall': mean_nrmse}
+    Compute NRMSE at multiple horizons by chaining windows autoregressively.
+    Uses cached rollout to avoid recomputation between plots.
     """
     if horizons is None:
-        horizons = [60, 180, 300, 600, 900, 1800, 3600, 5400]
+        horizons = [60, 180, 300, 600, 900, 1800, 2700, 3600, 4500, 5400]
     
-    max_steps = pv_true.shape[1]
+    # Get chained rollout (cached)
+    true_chain, pred_chain = get_chained_rollout(
+        plant_model, ctrl_models, data, device, split, max_windows
+    )
+    
     horizon_results = {}
+    prev_nrmse = None
     
-    for h in horizons:
-        if h > max_steps:
+    for h in sorted(horizons):
+        if h > len(true_chain):
             continue
         
-        steps = min(h, max_steps)
-        true_h = pv_true[:, :steps, :]
-        pred_h = pv_preds[:, :steps, :]
+        true_h = true_chain[:h, :]
+        pred_h = pred_chain[:h, :]
         
         horizon_results[h] = {}
         pv_nrmse = []
         
-        for k, pv_name in enumerate(PV_COLS):
-            true_k = true_h[:, :, k].flatten()
-            pred_k = pred_h[:, :, k].flatten()
+        n_pv = min(true_h.shape[1], len(PV_COLS))
+        for k in range(n_pv):
+            true_k = true_h[:, k]
+            pred_k = pred_h[:, k]
             nrmse_val = _nrmse(true_k, pred_k)
-            horizon_results[h][pv_name] = nrmse_val
+            horizon_results[h][PV_COLS[k]] = nrmse_val
             pv_nrmse.append(nrmse_val)
         
         horizon_results[h]['overall'] = np.mean(pv_nrmse)
+        
+        # Sanity check: error should increase (or at least not decrease significantly)
+        if prev_nrmse is not None and horizon_results[h]['overall'] < prev_nrmse * 0.95:
+            logger.warning(f"NRMSE decreased from {prev_nrmse:.4f} to {horizon_results[h]['overall']:.4f} at horizon {h}s - possible issue in chaining")
+        prev_nrmse = horizon_results[h]['overall']
     
     return horizon_results
 
@@ -352,24 +517,28 @@ def plot_scenario_overlay(
     plt.close(fig)
 
 
-# ── PLOT 6: Error Growth Curve (NRMSE vs Horizon) ─────────────────────────────────
+# ── PLOT 6: Error Growth Curve (NRMSE vs Horizon) — USES CHAINING ─────────────────
 
 def plot_error_growth_curve(
-    pv_true: np.ndarray,
-    pv_preds: np.ndarray,
+    plant_model,
+    ctrl_models: Dict[str, Any],
+    data: Dict,
+    device: torch.device,
     out_dir: Path,
     model_name: str = "",
-    horizons: List[int] = None
+    max_windows: int = 30,
+    split: str = "test",
 ) -> None:
     """
-    NRMSE vs prediction horizon (Figure 6).
-    Automatically computes error growth from predictions.
+    NRMSE vs prediction horizon using autoregressive window chaining (Figure 6).
+    This shows how error accumulates over extended prediction horizons.
     """
-    if horizons is None:
-        horizons = [60, 180, 300, 600, 900, 1800, 3600, 5400]
+    horizons = [60, 180, 300, 600, 900, 1800, 2700, 3600, 4500, 5400]
     
-    # Compute error growth
-    horizon_results = compute_error_growth(pv_true, pv_preds, horizons)
+    # Compute chained error growth (uses cache)
+    horizon_results = compute_error_growth_chained(
+        plant_model, ctrl_models, data, device, split, max_windows, horizons
+    )
     
     if not horizon_results:
         logger.warning("No horizon results to plot")
@@ -380,27 +549,27 @@ def plot_error_growth_curve(
     
     fig, ax = plt.subplots(figsize=(10, 6))
     
-    ax.plot(horizon_vals, overall, 'b-o', linewidth=2, markersize=8, label='Overall Average')
+    ax.plot(horizon_vals, overall, 'b-o', linewidth=2, markersize=6, label='Overall Average')
     
     # Add individual PVs
     for i, pv_name in enumerate(PV_COLS[:5]):
         pv_short = PV_SHORT[i]
         values = [horizon_results[h].get(pv_name, 0) for h in horizon_vals]
-        ax.plot(horizon_vals, values, '--', linewidth=1.5, alpha=0.7, label=pv_short)
+        ax.plot(horizon_vals, values, '--', linewidth=1.5, alpha=0.6, label=pv_short)
     
     # Threshold line
     ax.axhline(y=NRMSE_THRESHOLD, color='red', linestyle='--', linewidth=1.5,
                label=f'{NRMSE_THRESHOLD*100:.0f}% Threshold')
     
+    # Vertical line at training horizon
+    ax.axvline(x=TARGET_LEN, color='gray', linestyle=':', linewidth=1.5,
+               label=f'Training Horizon ({TARGET_LEN}s)')
+    
     ax.set_xlabel('Prediction Horizon (seconds)', fontsize=12)
     ax.set_ylabel('NRMSE', fontsize=12)
-    ax.set_title(f'{model_name} — Error Accumulation Over Time', fontsize=14)
+    ax.set_title(f'{model_name} — Error Accumulation Over Time (Chained Windows)', fontsize=14)
     ax.legend(loc='upper left', fontsize=9, ncol=2)
     ax.grid(True, linestyle='--', alpha=0.3)
-    
-    # Add vertical line at TARGET_LEN (180s)
-    ax.axvline(x=TARGET_LEN, color='gray', linestyle=':', linewidth=1.5,
-               label=f'Detection Window ({TARGET_LEN}s)')
     
     fig.tight_layout()
     path = out_dir / "error_growth_curve.png"
@@ -409,24 +578,28 @@ def plot_error_growth_curve(
     plt.close(fig)
 
 
-# ── PLOT 7: Error Heatmap (PV × Horizon) ─────────────────────────────────────────
+# ── PLOT 7: Error Heatmap (PV × Horizon) — USES CHAINING ─────────────────────────
 
 def plot_error_heatmap(
-    pv_true: np.ndarray,
-    pv_preds: np.ndarray,
+    plant_model,
+    ctrl_models: Dict[str, Any],
+    data: Dict,
+    device: torch.device,
     out_dir: Path,
     model_name: str = "",
-    horizons: List[int] = None
+    max_windows: int = 30,
+    split: str = "test",
 ) -> None:
     """
     Heatmap showing NRMSE for each PV at different horizons (Figure 7).
-    Automatically computes error growth from predictions.
+    Uses autoregressive window chaining.
     """
-    if horizons is None:
-        horizons = [60, 180, 300, 600, 900, 1800, 3600, 5400]
+    horizons = [60, 180, 300, 600, 900, 1800, 2700, 3600, 4500, 5400]
     
-    # Compute error growth
-    horizon_results = compute_error_growth(pv_true, pv_preds, horizons)
+    # Compute chained error growth (uses cache — same as plot 6)
+    horizon_results = compute_error_growth_chained(
+        plant_model, ctrl_models, data, device, split, max_windows, horizons
+    )
     
     if not horizon_results:
         logger.warning("No horizon results to plot")
@@ -440,14 +613,14 @@ def plot_error_heatmap(
         for j, h in enumerate(horizon_vals):
             error_matrix[i, j] = horizon_results[h].get(pv_name, 0)
     
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(14, 6))
     im = ax.imshow(error_matrix, cmap='YlOrRd', aspect='auto', vmin=0, vmax=0.25)
     
     # Set ticks
     ax.set_xticks(range(len(horizon_vals)))
     ax.set_yticks(range(len(pv_names)))
     
-    # Format x-axis labels (convert seconds to minutes for readability)
+    # Format x-axis labels
     x_labels = []
     for h in horizon_vals:
         if h >= 3600:
@@ -469,16 +642,16 @@ def plot_error_heatmap(
     
     ax.set_xlabel('Prediction Horizon', fontsize=12)
     ax.set_ylabel('Process Variable', fontsize=12)
-    ax.set_title(f'{model_name} — NRMSE Heatmap (PV vs Horizon)', fontsize=14)
+    ax.set_title(f'{model_name} — NRMSE Heatmap (PV vs Horizon) — Chained Windows', fontsize=14)
     
     cbar = plt.colorbar(im, ax=ax, label='NRMSE')
     cbar.ax.tick_params(labelsize=10)
     
-    # Add vertical line for TARGET_LEN (180s) position
+    # Add vertical line for training horizon
     try:
         target_idx = horizon_vals.index(TARGET_LEN)
         ax.axvline(x=target_idx - 0.5, color='cyan', linestyle='-', linewidth=1.5, alpha=0.7)
-        ax.text(target_idx - 0.5, -0.5, '← Detection Window →', 
+        ax.text(target_idx - 0.5, -0.5, '← Training Horizon →', 
                 ha='center', va='top', fontsize=8, color='cyan', rotation=0)
     except ValueError:
         pass
@@ -758,9 +931,13 @@ def plot_detection_rate_per_attack(
     plt.close(fig)
 
 
-# ── NEW: Combined function to generate all plots ────────────────────────────────
+# ── Combined function to generate all plots ────────────────────────────────────
 
 def generate_all_paper_plots(
+    plant_model,
+    ctrl_models: Dict[str, Any],
+    data: Dict,
+    device: torch.device,
     pv_true: np.ndarray,
     pv_preds: np.ndarray,
     scenario_labels: np.ndarray,
@@ -777,23 +954,13 @@ def generate_all_paper_plots(
 ) -> None:
     """
     Generate all 13 paper plots from computed data.
-    
-    Args:
-        pv_true: Ground truth PV values (N, T, 5)
-        pv_preds: Predicted PV values (N, T, 5)
-        scenario_labels: Scenario labels per window (N,)
-        attack_labels: Binary attack labels (N,)
-        anomaly_scores: MSE residuals per window (N,)
-        nrmse_overall: Dict of NRMSE per PV
-        nrmse_by_scenario: Dict of NRMSE per scenario
-        best_threshold: Optimal detection threshold
-        best_f1: Best F1 score
-        auroc: AUROC score
-        results_path: Path to results.json (for loss curves)
-        out_dir: Output directory for plots
-        model_name: Name for plot titles
+    Plots 6 & 7 use autoregressive window chaining with caching.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Clear cache before generating to ensure fresh data
+    global _CHAIN_CACHE
+    _CHAIN_CACHE.clear()
     
     # Plot 1: Loss curves
     print("\n[Plot 1] Loss curves...")
@@ -816,13 +983,17 @@ def generate_all_paper_plots(
     plot_scenario_overlay(pv_true, pv_preds, scenario_labels, 
                           pv_name="P1_PIT01", model_name=model_name, out_dir=out_dir)
     
-    # Plot 6: Error growth curve
-    print("\n[Plot 6] Error growth curve...")
-    plot_error_growth_curve(pv_true, pv_preds, out_dir, model_name)
+    # Plot 6: Error growth curve (USES CHAINING with cache)
+    print("\n[Plot 6] Error growth curve (chained windows)...")
+    plot_error_growth_curve(
+        plant_model, ctrl_models, data, device, out_dir, model_name
+    )
     
-    # Plot 7: Error heatmap
-    print("\n[Plot 7] Error heatmap...")
-    plot_error_heatmap(pv_true, pv_preds, out_dir, model_name)
+    # Plot 7: Error heatmap (USES CHAINING — reuses cache from plot 6)
+    print("\n[Plot 7] Error heatmap (chained windows)...")
+    plot_error_heatmap(
+        plant_model, ctrl_models, data, device, out_dir, model_name
+    )
     
     # Plot 8: ROC curve
     print("\n[Plot 8] ROC curve...")
