@@ -24,19 +24,7 @@ from pipeline import load_and_prepare_data
 from gru import GRUPlant, GRUController, CCSequenceModel
 from config import LOOPS, PROCESSED_DATA_DIR
 from plot_utils import (
-    plot_loss_curves,
-    plot_nrmse_per_pv,
-    plot_per_loop_performance,
-    plot_nrmse_per_scenario,
-    plot_scenario_overlay,
-    plot_error_growth_curve,
-    plot_error_heatmap,
-    plot_roc_curve,
-    plot_pr_curve,
-    plot_residual_boxplot,
-    plot_residual_timeline,
-    plot_confusion_matrix_attack,
-    plot_detection_rate_per_attack,
+    generate_all_paper_plots,
     compute_nrmse,
     compute_nrmse_per_scenario,
     CTRL_LOOPS
@@ -127,7 +115,7 @@ def run_closed_loop_inference(
     return pv_preds
 
 
-CKPT_DIR  = ROOT / "outputs" / "pipeline" / "gru_scenario_weighted"
+CKPT_DIR  = ROOT / "outputs" / "pipeline" / "gru_causal_plus_tuned"
 OUT_DIR   = ROOT / "plots"
 DEVICE    = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BATCH     = 128
@@ -239,90 +227,23 @@ print(f"  Best threshold: {best_threshold:.4f}")
 print(f"  Best F1: {best_f1:.4f}")
 print(f"  AUROC: {auroc:.4f}")
 
-# ── Generate all paper plots (13 total) ───────────────────────────────────────
-print("\n" + "="*60)
-print("Generating Paper Plots...")
-print("="*60)
-
-# Plot 1: Loss curves
-print("\n[Plot 1] Loss curves...")
-plot_loss_curves(CKPT_DIR / "results.json", "GRU-Scenario-Weighted", OUT_DIR)
-
-# Plot 2: NRMSE per PV
-print("\n[Plot 2] NRMSE per PV...")
-plot_nrmse_per_pv(nrmse_overall, "GRU-Scenario-Weighted", OUT_DIR)
-
-# Plot 3: Per-loop performance
-print("\n[Plot 3] Per-loop performance...")
-plot_per_loop_performance(nrmse_overall, "GRU-Scenario-Weighted", OUT_DIR)
-
-# Plot 4: NRMSE per scenario
-print("\n[Plot 4] NRMSE per scenario...")
-plot_nrmse_per_scenario(nrmse_by_scenario, "GRU-Scenario-Weighted", OUT_DIR)
-
-# Plot 5: Scenario overlay (PIT01)
-print("\n[Plot 5] Scenario overlay (PIT01)...")
-plot_scenario_overlay(
-    pv_true_test, pv_preds_test, scenario_test,
-    pv_name="P1_PIT01", model_name="GRU-Scenario-Weighted", out_dir=OUT_DIR
+# ── Generate all 13 paper plots using the combined function ───────────────────
+generate_all_paper_plots(
+    plant_model=plant_model,
+    ctrl_models=ctrl_models,
+    data=data,
+    device=DEVICE,
+    pv_true=pv_true_test,
+    pv_preds=pv_preds_test,
+    scenario_labels=scenario_test,
+    attack_labels=attack_test,
+    anomaly_scores=anomaly_scores,
+    nrmse_overall=nrmse_overall,
+    nrmse_by_scenario=nrmse_by_scenario,
+    best_threshold=best_threshold,
+    best_f1=best_f1,
+    auroc=auroc,
+    results_path=results_path,
+    out_dir=OUT_DIR,
+    model_name="GRU-Scenario-Weighted"
 )
-
-# Plot 6: Error growth curve (NRMSE vs prediction horizon)
-print("\n[Plot 6] Error growth curve...")
-plot_error_growth_curve(pv_true_test, pv_preds_test, OUT_DIR, "GRU-Scenario-Weighted")
-
-# Plot 7: Error heatmap (PV × Horizon)
-print("\n[Plot 7] Error heatmap...")
-plot_error_heatmap(pv_true_test, pv_preds_test, OUT_DIR, "GRU-Scenario-Weighted")
-
-# Plot 8: ROC curve
-print("\n[Plot 8] ROC curve...")
-plot_roc_curve(attack_test, anomaly_scores, "GRU-Scenario-Weighted", OUT_DIR)
-
-# Plot 9: Precision-Recall curve
-print("\n[Plot 9] Precision-Recall curve...")
-plot_pr_curve(attack_test, anomaly_scores, best_f1, best_threshold, 
-              "GRU-Scenario-Weighted", OUT_DIR)
-
-# Plot 10: Residual boxplot
-print("\n[Plot 10] Residual boxplot...")
-plot_residual_boxplot(anomaly_scores, scenario_test, best_threshold,
-                      "GRU-Scenario-Weighted", OUT_DIR)
-
-# Plot 11: Residual timeline
-print("\n[Plot 11] Residual timeline...")
-plot_residual_timeline(anomaly_scores, attack_test, best_threshold,
-                       "GRU-Scenario-Weighted", OUT_DIR)
-
-# Plot 12: Confusion matrix
-print("\n[Plot 12] Confusion matrix...")
-plot_confusion_matrix_attack(attack_test, anomaly_scores, best_threshold,
-                             "GRU-Scenario-Weighted", OUT_DIR)
-
-# Plot 13: Detection rate per attack type
-print("\n[Plot 13] Detection rate per attack type...")
-plot_detection_rate_per_attack(attack_test, anomaly_scores, scenario_test,
-                                best_threshold, "GRU-Scenario-Weighted", OUT_DIR)
-
-# ── Summary ────────────────────────────────────────────────────────────────────
-print("\n" + "="*60)
-print(f"All 13 paper plots saved to: {OUT_DIR}/")
-print("="*60)
-print("\nGenerated plots (13 of 13 total):")
-print("  ┌────┬─────────────────────────────────┬────────────────────────────────────────┐")
-print("  │ #  │ Filename                        │ Description                            │")
-print("  ├────┼─────────────────────────────────┼────────────────────────────────────────┤")
-print("  │ 1  │ loss_curves.png                 │ Training & validation loss curves      │")
-print("  │ 2  │ nrmse_per_pv.png                │ NRMSE bar chart per PV                 │")
-print("  │ 3  │ per_loop_performance.png        │ NRMSE per control loop                 │")
-print("  │ 4  │ nrmse_per_scenario.png          │ NRMSE per PV per scenario              │")
-print("  │ 5  │ scenario_overlay.png            │ Generated vs real PV across scenarios  │")
-print("  │ 6  │ error_growth_curve.png          │ NRMSE vs prediction horizon            │")
-print("  │ 7  │ error_heatmap.png               │ PV × Horizon heatmap                   │")
-print("  │ 8  │ roc_curve.png                   │ ROC curve with AUC                     │")
-print("  │ 9  │ pr_curve.png                    │ Precision-Recall curve                 │")
-print("  │ 10 │ residual_boxplot.png            │ Residual distribution by scenario      │")
-print("  │ 11 │ residual_timeline.png           │ Residual timeline with attack regions  │")
-print("  │ 12 │ confusion_matrix.png            │ Confusion matrix at best threshold     │")
-print("  │ 13 │ detection_rate_per_attack.png   │ Detection rate by attack type          │")
-print("  └────┴─────────────────────────────────┴────────────────────────────────────────┘")
