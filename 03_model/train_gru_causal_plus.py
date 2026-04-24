@@ -306,7 +306,7 @@ for epoch in range(1, EPOCHS + 1):
         pv_tgt  = torch.tensor(pv_target_tr[b]).float().to(device)
         sc      = torch.tensor(scenario_train[b]).long().to(device)
 
-        pred = plant_model(x_cv, x_cv_t, pv_init, sc, pv_teacher=pv_tf, ss_ratio=ss)
+        pred, _ = plant_model(x_cv, x_cv_t, pv_init, sc, pv_teacher=pv_tf, ss_ratio=ss)
         loss = weighted_mse(pred, pv_tgt, sc)
         plant_opt.zero_grad()
         loss.backward()
@@ -326,9 +326,10 @@ for epoch in range(1, EPOCHS + 1):
             pv_tf   = torch.tensor(pv_teacher_val[i:i+BATCH]).float().to(device)
             pv_tgt  = torch.tensor(pv_target_val[i:i+BATCH]).float().to(device)
             sc      = torch.tensor(scenario_val[i:i+BATCH]).long().to(device)
-            pval   += mse(plant_model(
+            pred_val, _ = plant_model(
                 x_cv, x_cv_t, pv_init, sc, pv_teacher=pv_tf, ss_ratio=0.0
-            ), pv_tgt).item()
+            )
+            pval += mse(pred_val, pv_tgt).item()
             n_b += 1
 
     pval /= max(1, n_b)

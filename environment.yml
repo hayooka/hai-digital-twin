@@ -3,17 +3,21 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python=3.10
-  - numpy>=1.24
-  - pandas>=2.0
-  - scikit-learn>=1.3
-  - scipy>=1.11
-  - matplotlib>=3.7
-  - joblib>=1.3
-  - networkx>=3.1
+  - python=3.14
+  - numpy>=2.2
+  - pandas>=2.3
+  - scikit-learn>=1.7
+  - scipy>=1.15
+  - matplotlib>=3.10
+  - joblib>=1.5
+  - networkx>=3.4
   - pip
   - pip:
       - torch>=2.0
+      - torchvision
+      - torchaudio
       - pyyaml>=6.0
-      - dowhy>=0.11
-      - tqdm
+      - dowhy>=0.14
+      - tqdm>=4.67
+      - ipykernel>=7.2
+      - jupyter_client>=8.8

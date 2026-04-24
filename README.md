@@ -16,8 +16,7 @@ hai-digital-twin/
 ├── 03_model/
 │   ├── gru.py                         # GRUPlant, GRUController, CCSequenceModel
 │   ├── train_gru_causal_plus.py       # stage 1: warm-starts plant from Re__reults_of_gru_after_wight_
-│   ├── train_gru_scenario_weighted.py # stage 2: warm-starts from gru_causal_plus output
-│   └── finetune_haiend.py             # stage 3: fine-tune with HAIEnd auxiliary signals
+│   └── train_gru_scenario_weighted.py # stage 2: warm-starts from gru_causal_plus output
 │
 ├── 04_evaluate/
 │   ├── evaluate_model.py              # NRMSE tables + eval_results.json per checkpoint
@@ -35,8 +34,7 @@ hai-digital-twin/
 │   ├── pipeline/
 │   │   ├── Re__reults_of_gru_after_wight_/  # base plant checkpoint (warm-start source for stage 1)
 │   │   ├── gru_causal_plus/           # stage 1 output (warm-start source for stage 2)
-│   │   ├── gru_scenario_weighted/     # stage 2 output (used by classification)
-│   │   └── gru_scenario_haiend/       # stage 3 output (used by detection)
+│   │   └── gru_scenario_weighted/     # stage 2 output (used by detection and classification)
 │   └── classifiers/
 │       ├── trts_rf_classifier.pkl     # final saved TRTS attack classifier
 │       └── trts_rf_scaler.pkl         # scaler paired with classifier (always use together)
@@ -102,18 +100,15 @@ Re__reults_of_gru_after_wight_/gru_plant.pt   ← base checkpoint (already exist
 stage 1: train_gru_causal_plus.py       → outputs/pipeline/gru_causal_plus/
           ↓
 stage 2: train_gru_scenario_weighted.py → outputs/pipeline/gru_scenario_weighted/
-          ↓
-stage 3: finetune_haiend.py             → outputs/pipeline/gru_scenario_haiend/
 ```
 
 ```bash
 python 03_model/train_gru_causal_plus.py        # stage 1
 python 03_model/train_gru_scenario_weighted.py  # stage 2
-python 03_model/finetune_haiend.py              # stage 3 (optional — needed for detection)
 ```
 
 ### Step 3 — Attack detection
-Uses `gru_scenario_haiend` checkpoint. Produces ROC, PR curve, confusion matrix, and detection stats.
+Uses `gru_scenario_weighted` checkpoint. Produces ROC, PR curve, confusion matrix, and detection stats.
 ```bash
 python 05_detect/sec3_detection.py
 # outputs → report_plots/figures/s3/

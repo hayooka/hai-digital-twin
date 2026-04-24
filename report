@@ -126,7 +126,7 @@ This gap motivates the use of a \textbf{digital twin surrogate} — a learned mo
 
 \vspace{0.3cm}
 
-This project develops a physics-informed closed-loop data drivern digital twin as simulator and generator for the \textbf{HAI 23.05} (Hardware-in-the-Loop Augmented ICS Security) testbed (HAI-Dataset-v4.0). The HAI testbed is one of the most representative publicly available ICS security benchmarks, comprising three interconnected physical processes which are: a boiler system (P1), a turbine system (P2), and a water treatment system (P3) and hardware-in-the-loop simulation (P4) controlled by Emerson Ovation DCS, GE Mark VIe DCS, and Siemens S7-300 PLC controllers, as illustrated in Figure 1.
+This project develops a data-driven closed-loop digital twin as simulator and generator for the \textbf{HAI 23.05} (Hardware-in-the-Loop Augmented ICS Security) testbed (HAI-Dataset-v4.0). The HAI testbed is one of the most representative publicly available ICS security benchmarks, comprising three interconnected physical processes which are: a boiler system (P1), a turbine system (P2), and a water treatment system (P3) and hardware-in-the-loop simulation (P4) controlled by Emerson Ovation DCS, GE Mark VIe DCS, and Siemens S7-300 PLC controllers, as illustrated in Figure 1.
 
 \begin{figure}[H]
 \centering
@@ -212,13 +212,13 @@ Quantify the impact of scheduled sampling on closed-loop autoregressive predicti
 Achieve a closed-loop Normalised Root Mean Square Error (NRMSE) below 10\% on all five process variable channels for both the primary and baseline models after tuning. This threshold constitutes the operational deployment criterion, ensuring that the surrogate's simulation fidelity is sufficient for reliable anomaly detection without excessive false-positive rates.
 
 \item \textbf{Objective 5 — Long-horizon prediction stability assessment.}
-Characterise the long-horizon autoregressive stability of both architectures by evaluating multi-horizon rollouts extending to 1.5 hours (5,400 consecutive prediction timesteps) for the GRU primary model and 24 minutes for the LSTM baseline, determining the operational prediction horizon for each architecture under further tuning.
+Characterise the long-horizon autoregressive stability of the GRU primary model by evaluating multi-horizon rollouts extending to 1.5 hours (5,400 consecutive prediction timesteps), determining whether the model maintains per-channel NRMSE below the deployment gate threshold across all evaluated horizon lengths beyond the training rollout window.
 
 \item \textbf{Objective 6 — Evidence-based architecture comparison for deployment.}
 Compare the deployment trade-offs between the GRU primary model and the LSTM baseline across prediction accuracy, computational efficiency, parameter count, training time, pre-tuning stability, and robustness across attack scenario types, to produce evidence-based recommendations for architecture selection in resource-constrained real-time ICS monitoring deployments.
 
 \item \textbf{Objective 7 — Scalable real-time deployment architecture.}
-Design a modular deployment architecture for the GRU  digital twin simulator and generator that supports edge deployment across multiple microgrid facilities, 1 Hz real-time inference, horizontal scaling through parallel Plant and Controller execution, and continuous anomaly detection with automated alerting and audit logging.
+Design a modular deployment architecture for the GRU digital twin simulator and generator that supports edge deployment across multiple microgrid facilities, 1 Hz real-time inference, horizontal scaling through parallel Plant and Controller execution, and continuous anomaly detection with automated alerting and audit logging.
 \end{itemize}
 
 \subsection{Relevance to Real-World Applications and Academic Research}
@@ -1089,16 +1089,6 @@ Figure~\ref{fig:conf_matrix} shows the confusion matrix at the selected operatin
 
 The detector correctly classifies most normal samples, with very few false positives, but misses a portion of attack samples. This reflects a conservative detection behaviour that prioritises low false alarm rates over high recall.
 
-Figure~\ref{fig:haiend_heatmap} provides a complementary analysis using internal DCS signals (HAIEnd).
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.95\textwidth]{s3/s3_haiend_heatmap.png}
-\caption{Mean absolute HAIEnd residual per DCS channel per scenario.}
-\label{fig:haiend_heatmap}
-\end{figure}
-
-The heatmap shows that \textit{AP\_with} produces widespread deviations across many channels, whereas \textit{AE\_no} produces localised deviations in specific function blocks. These localised effects are not reflected in PV residuals, which explains why such attacks are not detected by the primary anomaly score.
 
 \paragraph{Key Insight}
 The results reveal that detection performance is strongly dependent on the magnitude and observability of the attack. High-impact attacks such as \textit{AP\_with} generate large deviations from learned system dynamics and are therefore easily detectable. In contrast, low-impact or stealthy attacks (\textit{AP\_no}, \textit{AE\_no}) remain close to the normal operating regime and are difficult to distinguish using residual-based methods.
