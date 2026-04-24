@@ -998,36 +998,43 @@ The alignment is strongest for AP\_no and AE\_no, where the generated mean follo
 
 \paragraph{Key Insight}
 
-These results confirm that the GRU digital twin successfully operates as a conditional data generator. By conditioning on a scenario embedding, it can synthesise physically plausible, scenario-specific sensor trajectories whose statistical properties match real recordings. This enables the model to artificially balance the highly imbalanced HAI dataset — a property that has direct downstream consequences for attack classification, as evaluated in Section~\ref{sec:attack_classification}.
+These results confirm that the GRU digital twin successfully operates as a conditional data generator. By conditioning on a scenario embedding, it can synthesise physically plausible, scenario-specific sensor trajectories whose statistical properties match real recordings. This enables the model to artificially balance the highly imbalanced HAI dataset, a property that has direct downstream consequences for attack classification, as evaluated in Section~\ref{sec:attack_classification}.
 
 
 \subsubsection{Attack Detection}
 
-This section evaluates the effectiveness of the proposed anomaly detection approach based on prediction residuals. Detection performance is analyzed using multiple metrics, including detection rate, ROC-AUC, precision-recall behavior, and residual distribution across scenarios.
+This section evaluates the effectiveness of the proposed anomaly detection approach based on prediction residuals. Detection performance is analysed using multiple metrics, including detection rate, ROC-AUC, precision–recall behaviour, and residual distributions across scenarios. Table~\ref{tab:detection_rate} presents the detection rate per attack type.
 
-Figure~\ref{fig:detection_rate} presents the detection rate per attack type.
-
-\begin{figure}[H]
+\begin{table}[H]
 \centering
-\includegraphics[width=0.6\textwidth]{s3/s3_detection_per_attack.png}
-\caption{Attack detection rate across different attack scenarios.}
-\label{fig:detection_rate}
-\end{figure}
+\caption{Attack Detection Summary (threshold = 0.1978)}
+\begin{tabular}{lccc}
+\hline
+\textbf{Scenario} & \textbf{Windows (n)} & \textbf{Detected} & \textbf{Recall / FPR} \\
+\hline
+AP\_no        & 42   & 0   & 0.0\% \\
+AP\_with      & 37   & 32  & 86.5\% \\
+AE\_no        & 6    & 0   & 0.0\% \\
+Normal (FPR)  & 3292 & 0   & 0.0\% \\
+\hline
+\end{tabular}
+\label{tab:detection_rate}
+\end{table}
 
-The results show that the model achieves a high detection rate for the \textit{AP\_with} scenario, while detection remains low for \textit{AP\_no} and \textit{AE\_no}. This indicates that the detector is primarily sensitive to strong or system-altering attacks, while mild or non-disruptive perturbations remain indistinguishable from normal operation. The table also reports the false positive rate (FPR) on normal windows alongside the sample count for each scenario, making the class imbalance explicit — AE\_no has very few test windows, so its recall estimate carries high uncertainty.
+The results show that the model achieves a high detection rate for the \textit{AP\_with} scenario, while detection remains negligible for \textit{AP\_no} and \textit{AE\_no}. This indicates that the detector is primarily sensitive to strong, system-altering attacks, whereas mild or non-disruptive perturbations remain indistinguishable from normal operation. In addition, the small number of samples for \textit{AE\_no} introduces uncertainty in its recall estimate.
 
-Figure~\ref{fig:residual_timeline} illustrates this behaviour over time, showing the raw anomaly score across sequential windows for each scenario with the detection threshold marked.
+Figure~\ref{fig:residual_timeline} illustrates this behaviour over time, showing the anomaly score across sequential windows for each scenario with the detection threshold marked.
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.95\textwidth]{s3/s3_residual_timeline.png}
-\caption{Anomaly score (mean absolute PV residual) over sequential test windows for each scenario. The dashed line marks the detection threshold. Red shading indicates windows flagged as attacks. AP\_with produces a sharp, sustained spike well above the threshold. AP\_no and AE\_no scores remain close to the normal baseline, explaining the low recall for these scenarios.}
+\caption{Anomaly score (mean absolute PV residual) over sequential test windows for each scenario. The dashed line marks the detection threshold. Red shading indicates detected attack windows.}
 \label{fig:residual_timeline}
 \end{figure}
 
-Under normal operation, the score fluctuates narrowly below the threshold with occasional brief crossings (false positives). The AP\_with windows produce an immediate and sustained spike, confirming near-instant detection. AP\_no and AE\_no scores overlap substantially with the normal distribution, which is consistent with the stealthy nature of these attack types — AP\_no manipulates individual I/O points without combustion disturbance, and AE\_no operates entirely within internal DCS logic invisible to PV residuals.
+Under normal operation, the anomaly score remains tightly bounded below the threshold, with only occasional crossings. The \textit{AP\_with} scenario produces a clear and sustained increase well above the threshold, enabling reliable detection. In contrast, \textit{AP\_no} and \textit{AE\_no} exhibit substantial overlap with the normal score range, which explains their low detection rates. This behaviour is consistent with the nature of these attacks: \textit{AP\_no} affects individual I/O signals without significantly altering process dynamics, while \textit{AE\_no} operates within internal DCS logic that is not directly reflected in PV residuals.
 
-To understand this behavior further, Figure~\ref{fig:residual_distribution} shows the distribution of residuals across scenarios.
+Figure~\ref{fig:residual_distribution} shows the distribution of residuals across scenarios.
 
 \begin{figure}[H]
 \centering
@@ -1036,7 +1043,7 @@ To understand this behavior further, Figure~\ref{fig:residual_distribution} show
 \label{fig:residual_distribution}
 \end{figure}
 
-The residuals under \textit{AP\_with} are significantly higher and more spread (median $\approx 0.78$), compared to very low and tightly clustered residuals in \textit{Normal}, \textit{AP\_no}, and \textit{AE\_no} (median $\approx 0.01$–0.02). This clear separation explains why detection is successful only in the AP\_with case.
+The residuals under \textit{AP\_with} are substantially higher and more dispersed (median $\approx 0.78$), while \textit{Normal}, \textit{AP\_no}, and \textit{AE\_no} remain tightly clustered at low values (median $\approx 0.01$--0.02). This separation is specific to the \textit{AP\_with} scenario, whereas the other scenarios exhibit strong overlap with normal behaviour, limiting their detectability using a single global threshold.
 
 Figure~\ref{fig:roc_curve} illustrates the ROC curve of the detector.
 
@@ -1047,9 +1054,9 @@ Figure~\ref{fig:roc_curve} illustrates the ROC curve of the detector.
 \label{fig:roc_curve}
 \end{figure}
 
-The model achieves an AUC of \textbf{0.903}, indicating strong discriminative capability between normal and attack conditions. However, this performance is mainly driven by the separability of the AP\_with scenario.
+The model achieves an AUC of \textbf{0.903}, indicating good ranking capability between normal and anomalous samples. However, this performance is largely driven by the strong separability of the \textit{AP\_with} scenario.
 
-Figure~\ref{fig:pr_curve} presents the precision-recall curve.
+Figure~\ref{fig:pr_curve} presents the precision–recall curve.
 
 \begin{figure}[H]
 \centering
@@ -1058,20 +1065,20 @@ Figure~\ref{fig:pr_curve} presents the precision-recall curve.
 \label{fig:pr_curve}
 \end{figure}
 
-The best F1 score is \textbf{0.547} at a threshold of approximately \textbf{0.198}. While precision is high at low recall, it drops significantly as recall increases, indicating that detecting more attacks introduces false positives. The low average precision reflects the severe class imbalance: attack windows constitute less than 3\% of the test set, so even a small number of false positives substantially degrades precision.
+The best F1 score is \textbf{0.547} at a threshold of approximately \textbf{0.198}. Precision decreases as recall increases, reflecting the trade-off between detecting more attacks and introducing false positives. The relatively low average precision is influenced by the strong class imbalance, as attack windows constitute a small fraction of the dataset.
 
-Figure~\ref{fig:threshold_sensitivity} makes the threshold operating-point choice explicit by showing how recall for each attack type and the false positive rate on normal windows vary continuously across all possible thresholds.
+Figure~\ref{fig:threshold_sensitivity} further illustrates the effect of threshold selection.
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.85\textwidth]{s3/s3_threshold_sensitivity.png}
-\caption{Threshold sensitivity curve showing recall per attack type (AP\_no, AP\_with, AE\_no) and false positive rate on normal windows as a continuous function of the detection threshold. The vertical dotted line marks the best-F1 operating point. Lowering the threshold recovers AP\_no recall but raises the false positive rate; raising it reduces false alarms at the cost of missing weaker attacks.}
+\includegraphics[width=0.75\textwidth]{s3/s3_threshold_sensitivity.png}
+\caption{Threshold sensitivity curve showing recall per attack type and false positive rate across thresholds.}
 \label{fig:threshold_sensitivity}
 \end{figure}
 
-The curve shows that AP\_with recall drops to zero only at very high thresholds, confirming its large residual signature. AP\_no and AE\_no recall is recoverable by lowering the threshold, but only at the expense of a higher false positive rate on normal windows — a fundamental precision-recall tradeoff driven by the overlap between these attack residuals and the normal distribution. In a deployment context, the threshold could be adjusted based on the relative cost of missed detections versus false alarms.
+Lowering the threshold improves recall for \textit{AP\_no} and \textit{AE\_no}, but only at the cost of increasing false positives on normal data. This trade-off arises from the overlap between these attack residuals and the normal distribution, indicating a fundamental limitation of threshold-based detection.
 
-Finally, Figure~\ref{fig:conf_matrix} shows the confusion matrix at the optimal threshold.
+Figure~\ref{fig:conf_matrix} shows the confusion matrix at the selected operating point.
 
 \begin{figure}[H]
 \centering
@@ -1080,48 +1087,45 @@ Finally, Figure~\ref{fig:conf_matrix} shows the confusion matrix at the optimal 
 \label{fig:conf_matrix}
 \end{figure}
 
-The model correctly classifies most normal samples (true negatives), with very few false positives. However, it misses a portion of attack samples, resulting in moderate recall. This reflects a conservative detection behavior, prioritizing reliability over aggressive detection.
+The detector correctly classifies most normal samples, with very few false positives, but misses a portion of attack samples. This reflects a conservative detection behaviour that prioritises low false alarm rates over high recall.
 
-Figure~\ref{fig:haiend_heatmap} provides a complementary view of the detection signal by showing the mean absolute HAIEnd residual per internal DCS channel per scenario. Unlike the PV residuals used for detection, HAIEnd signals expose the internal function block outputs of the DCS — the layer where AE attacks operate.
+Figure~\ref{fig:haiend_heatmap} provides a complementary analysis using internal DCS signals (HAIEnd).
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.95\textwidth]{s3/s3_haiend_heatmap.png}
-\caption{Mean absolute HAIEnd residual per DCS channel per scenario (heatmap). Each row is a scenario; each column is an internal DCS function block output. Bright cells indicate channels where the model's predicted internal state strongly deviates from the recorded state. AP\_with produces broad activation across many channels; AE\_no produces localised activation in specific function blocks, consistent with its targeted manipulation of DCS logic.}
+\caption{Mean absolute HAIEnd residual per DCS channel per scenario.}
 \label{fig:haiend_heatmap}
 \end{figure}
 
-The heatmap reveals that AP\_with disturbs a broad set of channels simultaneously — consistent with its multi-loop combustion disturbance — while AE\_no produces localised residuals in specific DCS function blocks. This localised signature is invisible to standard PV-based detection but is captured by the HAIEnd head, motivating its inclusion as a complementary detection channel for stealthy attacks.
+The heatmap shows that \textit{AP\_with} produces widespread deviations across many channels, whereas \textit{AE\_no} produces localised deviations in specific function blocks. These localised effects are not reflected in PV residuals, which explains why such attacks are not detected by the primary anomaly score.
 
 \paragraph{Key Insight}
-The imbalance in sample distribution across scenarios contributes to the observed detection behavior. Although strong attack scenarios such as \textit{AP\_with} may be less frequent, they introduce more distinct deviations from normal system dynamics, making them easier to detect. In contrast, scenarios with fewer samples and weaker deviations (e.g., \textit{AP\_no}, \textit{AE\_no}) remain closer to normal behavior and are therefore harder to distinguish.
+The results reveal that detection performance is strongly dependent on the magnitude and observability of the attack. High-impact attacks such as \textit{AP\_with} generate large deviations from learned system dynamics and are therefore easily detectable. In contrast, low-impact or stealthy attacks (\textit{AP\_no}, \textit{AE\_no}) remain close to the normal operating regime and are difficult to distinguish using residual-based methods.
 
-Notably, the \textit{AP\_with} scenario, which is the most difficult to predict, is also the easiest to detect. The large deviation from learned system dynamics produces significantly higher residuals, enabling clear separation from normal conditions.
+This highlights an important limitation of the approach: the detector functions as a binary alarm with uneven sensitivity across attack types. While it is effective for identifying strong deviations, it fails to reliably detect subtle manipulations that do not significantly affect observable process variables.
 
-Conversely, \textit{AP\_no} and \textit{AE\_no} remain within the learned distribution, making them easier to predict but less distinguishable from normal operation in the detection task.
-
-Overall, these results highlight an inverse relationship between prediction difficulty and detection ease: scenarios that deviate more strongly from learned dynamics are harder to predict but easier to detect.
-
-These findings confirm that the detection mechanism is highly effective for strong attacks that significantly alter system behavior, while remaining less sensitive to subtle or low-impact perturbations. This behavior is consistent with the design of the digital twin, which detects anomalies based on structural deviations from learned system dynamics rather than statistical noise.
-
-However, the residual-based detector has a critical limitation: it functions as a binary alarm that answers only \emph{whether} an anomaly is present, and its sensitivity is unevenly distributed across attack types. AP\_with is reliably detected because its multi-loop combustion disturbance produces large, sustained PV residuals. AP\_no and AE\_no, by contrast, remain almost invisible to the detector — their residuals overlap with the normal distribution, and lowering the threshold to catch them would flood the system with false positives on normal operation. In a real deployment, this means that two of the three attack families could go undetected indefinitely if the operator relies on the residual threshold alone.
-
-This gap motivates the attack classification approach presented in the following section. Rather than replacing the detector, the classifier \emph{complements} it by answering a second, finer-grained question: given that the system is flagged (or suspected), \emph{which} attack type is it? And critically, the classifier is trained not on the scarce real attack data — of which there are fewer than 100 labelled windows across all attack types — but on synthetic trajectories generated by the same digital twin whose generation quality was validated in Section~\ref{sec:synth_quality}. This closes the loop: the model that cannot detect AP\_no and AE\_no through its residuals can nevertheless \emph{generate} realistic AP\_no and AE\_no trajectories, and those generated trajectories are real enough to train a classifier that successfully identifies all three attack types on held-out real data.
+This limitation motivates the need for complementary methods, such as attack classification or multi-modal detection, which can leverage additional signals beyond PV residuals to improve coverage across diverse attack scenarios.
 
 %=========================
 \subsubsection{Attack Classification Using Synthetic Data}
-\label{sec:attack_classification}
 
-The residual-based detector described above identifies \emph{whether} an anomaly is present, but does not classify \emph{which} attack type is occurring — and as shown above, it misses AP\_no and AE\_no entirely at any operationally acceptable threshold. A four-class classifier (Normal / AP\_no / AP\_with / AE\_no) could provide finer-grained identification, but the HAI dataset is severely imbalanced: the test set contains 3{,}292 Normal windows and only 42 AP\_no, 37 AP\_with, and 6 AE\_no windows. With so few labelled attack samples, a classifier trained on real data alone memorises the small attack set rather than learning generalisable decision boundaries.
+The residual-based detector described in the previous section provides a binary indication of whether an anomaly is present, but does not identify the type of attack. Its sensitivity is also uneven: while \textit{AP\_with} is reliably detected, \textit{AP\_no} and \textit{AE\_no} remain largely undetected at practical operating thresholds.
 
-To address this, we leverage the synthetic generation capability demonstrated in the previous section. The generator is used to produce 3{,}292 balanced synthetic windows per attack class, creating a training set in which all four classes are equally represented. A Random Forest classifier is then trained on 30 statistical features extracted from the five PV channels (mean, std, min, max, absolute mean, and mean first difference per channel) and evaluated on the original real test windows.
+A natural extension is to introduce a multi-class classifier (Normal / AP\_no / AP\_with / AE\_no) for finer-grained identification. However, the HAI dataset is highly imbalanced, with 3,292 Normal windows compared to only 42 \textit{AP\_no}, 37 \textit{AP\_with}, and 6 \textit{AE\_no} windows. Under these conditions, a classifier trained directly on real data is prone to overfitting, effectively memorising the limited attack samples rather than learning generalisable decision boundaries.
+
+To address this limitation, we leverage the synthetic data generation capability introduced in Section~\ref{sec:synth_quality}. The generator is used to produce 3,292 synthetic windows per class, creating a balanced training dataset. A Random Forest classifier is then trained using 30 statistical features extracted from the five PV channels, capturing both steady-state behaviour and short-term dynamics.
+
+The classifier is evaluated on the original real test windows. This setup—training entirely on synthetic data and testing on real data—provides a direct measure of how well the generated samples support generalisation.
 
 Three training configurations are compared:
 
 \begin{itemize}
-    \item \textbf{Baseline (Real only):} Classifier trained and tested on the same imbalanced real data. Achieves a trivial Macro F1 of 1.000 by memorising the 85 real attack windows, demonstrating that the real dataset is too small to produce a reliable generalised classifier.
-    \item \textbf{TRTS — Synthetic only:} Classifier trained exclusively on synthetic data (3{,}292 windows per class, zero real attack samples) and tested on the real test set. Achieves Macro F1 = \textbf{0.937}, with per-class F1 of 1.00 (Normal), 0.98 (AP\_no), 0.97 (AP\_with), and 0.80 (AE\_no).
-    \item \textbf{Mixed — Real Normal + Synthetic attacks:} Classifier trained on real Normal windows combined with synthetic attack windows, tested on real. Achieves Macro F1 = 0.826, slightly lower than TRTS due to the domain gap between real Normal and synthetic attack trajectories.
+    \item \textbf{Baseline (Real only):} Trained and tested on the same imbalanced real data. Achieves Macro F1 = 1.000, reflecting memorisation rather than generalisation.
+    
+    \item \textbf{TRTS — Synthetic only:} Trained exclusively on synthetic data (3{,}292 windows per class) and tested on real data. Achieves Macro F1 = \textbf{0.937}, with per-class F1 of 1.00 (Normal), 0.98 (AP\_no), 0.97 (AP\_with), and 0.80 (AE\_no).
+    
+    \item \textbf{Mixed — Real Normal + Synthetic attacks:} Trained on real Normal windows and synthetic attack data, tested on real. Achieves Macro F1 = 0.826, likely reflecting distribution mismatch between real and synthetic samples.
 \end{itemize}
 
 Figure~\ref{fig:clf_bar} summarises these results.
@@ -1129,24 +1133,25 @@ Figure~\ref{fig:clf_bar} summarises these results.
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.85\textwidth]{s3_experement/s3c_experiment_bar.png}
-\caption{Four-class attack classification Macro F1 under three training configurations. TRTS trains exclusively on synthetic data and tests on real sensor recordings.}
+\caption{Four-class attack classification Macro F1 under three training configurations.}
 \label{fig:clf_bar}
 \end{figure}
 
-Figure~\ref{fig:clf_cm} shows the confusion matrix for the TRTS experiment. All four classes are identified, with misclassifications confined to the rarest scenario (AE\_no, 6 real test windows).
+Figure~\ref{fig:clf_cm} shows the confusion matrix for the TRTS experiment. All classes are identified, with most errors concentrated in the rarest scenario (\textit{AE\_no}, 6 test windows).
 
 \begin{figure}[H]
 \centering
 \includegraphics[width=0.9\textwidth]{s3_experement/s3c_confusion_trts.png}
-\caption{Confusion matrix for the TRTS classifier (trained on synthetic data only, tested on real data).}
+\caption{Confusion matrix for the TRTS classifier (trained on synthetic data, tested on real data).}
 \label{fig:clf_cm}
 \end{figure}
 
 \paragraph{Key Insight}
-The TRTS result — Macro F1 = 0.937 with \emph{no real attack samples} in the training set — provides direct empirical evidence that the GRU digital twin's generated data is accurate enough to substitute for real labelled data in a downstream classification task. This result directly addresses the detection gap identified in Section~\ref{sec:attack_classification}: while the residual-based detector reliably catches only AP\_with, the classifier trained on synthetic data successfully identifies all three attack families on real held-out data. AP\_no achieves F1 = 0.98 and AP\_with achieves F1 = 0.97; AE\_no remains the hardest at F1 = 0.80, consistent with its nature as a stealthy internal DCS attack that leaves only subtle traces in observable PV signals.
+The TRTS results demonstrate that a classifier trained solely on synthetic data can generalise effectively to real-world samples, achieving strong performance across all attack types. In particular, it enables reliable identification of \textit{AP\_no} and \textit{AE\_no}, which were not detectable using residual-based methods.
 
-Together, the two components form a \textbf{two-stage detection and identification system}. The residual-based detector acts as a fast binary alarm — sensitive, low-latency, and reliable for strong attacks that produce large PV deviations. The synthetic-data-trained classifier acts as a second stage that assigns the attack type, covering the AP\_no and AE\_no cases that the detector misses. The viability of this two-stage architecture rests on the generation quality demonstrated in Section~\ref{sec:synth_quality}: the same model that cannot detect AP\_no and AE\_no through its residuals can nonetheless generate realistic enough trajectories for those scenarios to train a classifier that identifies them. This dual-role property — physics-informed simulator and conditional generator — is what makes the single GRU architecture deployable as a complete cyber-physical security monitoring system rather than a narrowly scoped anomaly scorer.
+These findings suggest that the generated data captures key structural properties of system behaviour relevant for classification, although subtle attacks such as \textit{AE\_no} remain more challenging.
 
+Overall, the classification stage complements the residual-based detector: the detector captures strong deviations, while the classifier provides finer-grained identification, including for attacks that do not produce large observable residuals.
 %=================================
 
 
