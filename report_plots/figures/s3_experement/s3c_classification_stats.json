@@ -1,0 +1,12 @@
+{
+  "baseline_macro_f1": 1.0,
+  "trts_macro_f1": 0.9367303769775179,
+  "mixed_macro_f1": 0.8257072772560504,
+  "n_synth_per_class": 3292,
+  "real_class_counts": {
+    "Normal": 3292,
+    "AP_no": 42,
+    "AP_with": 37,
+    "AE_no": 6
+  }
+}
