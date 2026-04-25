@@ -1,0 +1,8 @@
+streamlit>=1.32
+streamlit-autorefresh
+numpy
+pandas
+scikit-learn
+torch
+plotly
+openai>=1.0

@@ -1,9 +1,45 @@
 {
-  "baseline_macro_f1": 1.0,
-  "trts_macro_f1": 0.9367303769775179,
-  "mixed_macro_f1": 0.8257072772560504,
+  "experiment_A_baseline": {
+    "macro_f1": 0.4319859545974196,
+    "per_class_f1": [
+      0.994610485056345,
+      0.3333333333333333,
+      0.4,
+      0.0
+    ],
+    "train": "real 80% (stratified)",
+    "test": "real 20% (stratified)"
+  },
+  "experiment_B_trts": {
+    "macro_f1": 0.2678312318623036,
+    "per_class_f1": [
+      0.9879915941158811,
+      0.08333333333333333,
+      0.0,
+      0.0
+    ],
+    "train": "synthetic only (3292/class, train-seeded)",
+    "test": "real held-out test set"
+  },
+  "experiment_C_mixed": {
+    "macro_f1": 0.25803580358035805,
+    "per_class_f1": [
+      0.9876987698769877,
+      0.044444444444444446,
+      0.0,
+      0.0
+    ],
+    "train": "real Normal (train) + synthetic attacks (3292/class, train-seeded)",
+    "test": "real held-out test set"
+  },
   "n_synth_per_class": 3292,
-  "real_class_counts": {
+  "real_train_class_counts": {
+    "Normal": 10148,
+    "AP_no": 98,
+    "AP_with": 20,
+    "AE_no": 16
+  },
+  "real_test_class_counts": {
     "Normal": 3292,
     "AP_no": 42,
     "AP_with": 37,
