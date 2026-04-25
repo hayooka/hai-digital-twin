@@ -1,11 +1,29 @@
 {
   "model": "XGBClassifier",
-  "features": "30 (6 stats x 5 PVs, 180s window) \u2014 identical to RF",
-  "baseline_macro_f1": 1.0,
-  "trts_macro_f1": 0.9367303769775179,
-  "mixed_macro_f1": 0.9367303769775179,
-  "rf_trts_macro_f1": 0.937,
-  "rf_mixed_macro_f1": 0.826,
+  "features": "30 (6 stats x 5 PVs, 180s window)",
+  "baseline_macro_f1": 0.7968815844922039,
+  "trts_macro_f1": 0.2830855376885672,
+  "mixed_macro_f1": 0.2795458478446151,
+  "per_class_f1": {
+    "Baseline": {
+      "Normal": 0.9970501474926253,
+      "AP_no": 0.6666666666666666,
+      "AP_with": 0.6666666666666666,
+      "AE_no": 0.8571428571428571
+    },
+    "TRTS": {
+      "Normal": 0.9792809262644728,
+      "AP_no": 0.08163265306122448,
+      "AP_with": 0.07142857142857142,
+      "AE_no": 0.0
+    },
+    "Mixed": {
+      "Normal": 0.9828865667121005,
+      "AP_no": 0.0975609756097561,
+      "AP_with": 0.03773584905660377,
+      "AE_no": 0.0
+    }
+  },
   "n_synth_per_class": 3292,
   "real_class_counts": {
     "Normal": 3292,
