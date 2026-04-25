@@ -1,7 +1,11 @@
 {
+  "model": "XGBClassifier",
+  "features": "30 (6 stats x 5 PVs, 180s window) \u2014 identical to RF",
   "baseline_macro_f1": 1.0,
   "trts_macro_f1": 0.9367303769775179,
-  "mixed_macro_f1": 0.8257072772560504,
+  "mixed_macro_f1": 0.9367303769775179,
+  "rf_trts_macro_f1": 0.937,
+  "rf_mixed_macro_f1": 0.826,
   "n_synth_per_class": 3292,
   "real_class_counts": {
     "Normal": 3292,
