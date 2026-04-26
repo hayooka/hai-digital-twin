@@ -1,0 +1,43 @@
+{
+  "items": [
+    {
+      "id": 2,
+      "name": "LC_SP_bias_-30_20",
+      "loop": "LC",
+      "injection_point": "SP",
+      "attack_type": "bias",
+      "start_offset": -30,
+      "duration": 90,
+      "magnitude": 20.0,
+      "scenario": 0,
+      "max_dpv": 2.10687255859375,
+      "timestamp": "2026-04-25T06:03:42.424019Z"
+    },
+    {
+      "id": 3,
+      "name": "LC_SP_bias_-30_20",
+      "loop": "LC",
+      "injection_point": "SP",
+      "attack_type": "bias",
+      "start_offset": -30,
+      "duration": 90,
+      "magnitude": 20.0,
+      "scenario": 0,
+      "max_dpv": 2.10687255859375,
+      "timestamp": "2026-04-25T06:54:24.317016Z"
+    },
+    {
+      "id": 4,
+      "name": "LC_SP_bias_-30_20",
+      "loop": "LC",
+      "injection_point": "SP",
+      "attack_type": "bias",
+      "start_offset": -30,
+      "duration": 90,
+      "magnitude": 20.0,
+      "scenario": 0,
+      "max_dpv": 2.10687255859375,
+      "timestamp": "2026-04-25T15:38:49.091834Z"
+    }
+  ]
+}

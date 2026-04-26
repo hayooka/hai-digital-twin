@@ -1,0 +1,104 @@
+{
+  "classifier": "RandomForest (teammate's 30-feat strategy)",
+  "hparams": {
+    "n_estimators": 500,
+    "random_state": 42,
+    "n_jobs": -1
+  },
+  "n_features": 30,
+  "window_sec": 180,
+  "stride_sec": 60,
+  "threshold": 0.5,
+  "A": {
+    "n_train": 3315,
+    "n_test": 1422,
+    "n_train_attack": 212,
+    "n_test_attack": 126,
+    "f1": 0.24285714285714285,
+    "precision": 0.22077922077922077,
+    "recall": 0.2698412698412698,
+    "auroc": 0.7083578287281991,
+    "avg_precision": 0.24327522985393069,
+    "threshold": 0.5,
+    "confusion_matrix": [
+      [
+        1176,
+        120
+      ],
+      [
+        92,
+        34
+      ]
+    ],
+    "fit_time_s": 0.69
+  },
+  "B": {
+    "n_train": 3315,
+    "n_test": 200,
+    "n_train_attack": 212,
+    "n_test_attack": 150,
+    "f1": 0.12048192771084337,
+    "precision": 0.625,
+    "recall": 0.06666666666666667,
+    "auroc": 0.42306666666666665,
+    "avg_precision": 0.7046135365709918,
+    "threshold": 0.5,
+    "confusion_matrix": [
+      [
+        44,
+        6
+      ],
+      [
+        140,
+        10
+      ]
+    ],
+    "fit_time_s": 0.67
+  },
+  "C": {
+    "n_train": 200,
+    "n_test": 1422,
+    "n_train_attack": 150,
+    "n_test_attack": 126,
+    "f1": 0.15458937198067632,
+    "precision": 0.08602150537634409,
+    "recall": 0.7619047619047619,
+    "auroc": 0.39674884871644134,
+    "avg_precision": 0.06860257982458426,
+    "threshold": 0.5,
+    "confusion_matrix": [
+      [
+        276,
+        1020
+      ],
+      [
+        30,
+        96
+      ]
+    ],
+    "fit_time_s": 0.48
+  },
+  "D": {
+    "n_train": 3515,
+    "n_test": 1422,
+    "n_train_attack": 362,
+    "n_test_attack": 126,
+    "f1": 0.22707423580786026,
+    "precision": 0.2524271844660194,
+    "recall": 0.20634920634920634,
+    "auroc": 0.6768475651577502,
+    "avg_precision": 0.2476971831469317,
+    "threshold": 0.5,
+    "confusion_matrix": [
+      [
+        1219,
+        77
+      ],
+      [
+        100,
+        26
+      ]
+    ],
+    "fit_time_s": 0.71
+  }
+}

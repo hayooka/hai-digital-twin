@@ -39,7 +39,6 @@ from sklearn.metrics import roc_auc_score, f1_score, precision_recall_curve
 from pipeline import load_and_prepare_data
 from gru import GRUPlant, GRUController, CCSequenceModel
 from config import LOOPS, PV_COLS, PROCESSED_DATA_DIR
-from plot_results import plot_training_curves
 
 # ── Config ────────────────────────────────────────────────────────────────────
 SEED    = 42
@@ -85,8 +84,8 @@ SS_END    = 20
 SS_MAX    = 0.483
 
 # Warm-start from best causal_plus run
-WARMSTART_CKPT     = ROOT / "outputs/pipeline/gru_causal_plus_tuned/gru_plant.pt"
-WARMSTART_CTRL_DIR = ROOT / "outputs/pipeline/gru_causal_plus_tuned"
+WARMSTART_CKPT     = ROOT / "outputs/pipeline/gru_causal_plus/gru_causal_plus/gru_plant.pt"
+WARMSTART_CTRL_DIR = ROOT / "outputs/pipeline/gru_causal_plus/gru_causal_plus"
 
 OUT_DIR = ROOT / "outputs/pipeline/gru_scenario_weighted"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -291,7 +290,7 @@ for epoch in range(1, EPOCHS + 1):
         pv_tf  = torch.tensor(pv_teacher_tr[b]).float().to(device)
         pv_tgt = torch.tensor(pv_target_tr[b]).float().to(device)
         sc     = torch.tensor(scenario_train[b]).long().to(device)
-        pred   = plant_model(x_cv, x_cv_t, pv_ini, sc, pv_teacher=pv_tf, ss_ratio=ss)
+        pred, _ = plant_model(x_cv, x_cv_t, pv_ini, sc, pv_teacher=pv_tf, ss_ratio=ss)
         loss   = weighted_mse(pred, pv_tgt, sc)
         plant_opt.zero_grad(); loss.backward()
         nn.utils.clip_grad_norm_(plant_model.parameters(), GRAD_CLIP)
@@ -308,8 +307,9 @@ for epoch in range(1, EPOCHS + 1):
             pv_tf  = torch.tensor(pv_teacher_val[i:i+BATCH]).float().to(device)
             pv_tgt = torch.tensor(pv_target_val[i:i+BATCH]).float().to(device)
             sc     = torch.tensor(scenario_val[i:i+BATCH]).long().to(device)
-            pval  += weighted_mse(plant_model(x_cv, x_cv_t, pv_ini, sc,
-                                     pv_teacher=pv_tf, ss_ratio=0.0), pv_tgt, sc).item()
+            pred_val, _ = plant_model(x_cv, x_cv_t, pv_ini, sc,
+                                      pv_teacher=pv_tf, ss_ratio=0.0)
+            pval  += weighted_mse(pred_val, pv_tgt, sc).item()
             n_b   += 1
 
     pval /= max(1, n_b)
@@ -345,11 +345,17 @@ for epoch in range(1, EPOCHS + 1):
 plant_model.load_state_dict(best_state)
 print(f"\n  Best val loss: {best_val:.5f}")
 
-plot_training_curves(
-    train_losses, val_losses, ss_ratios,
-    model_name="GRU-Scenario-Weighted",
-    save_path=OUT_DIR / "gru_loss_curves.png",
-)
+# ── Training loss curves ──────────────────────────────────────────────────────
+import matplotlib.pyplot as plt
+fig, ax = plt.subplots(figsize=(9, 4))
+ax.semilogy(train_losses, label="Train")
+ax.semilogy(val_losses,   label="Val")
+ax.set_xlabel("Epoch"); ax.set_ylabel("Loss (log)")
+ax.set_title("GRU-Scenario-Weighted — Training Loss"); ax.legend(); ax.grid(alpha=0.3)
+fig.tight_layout()
+fig.savefig(OUT_DIR / "gru_loss_curves.png", dpi=150, bbox_inches="tight")
+plt.close(fig)
+print(f"  Saved: gru_loss_curves.png")
 
 # ── 5. Test evaluation ────────────────────────────────────────────────────────
 print(f"\nStep 4: Test-set evaluation ({len(X_test)} windows)...")
@@ -371,7 +377,7 @@ with torch.no_grad():
             Xc      = torch.tensor(ctrl_data[ln]['X_test'][sl]).float().to(device)
             cv_pred = ctrl_models[ln].predict(Xc, target_len=TARGET_LEN)
             xct_b[:, :, ctrl_cv_col_idx[ln]:ctrl_cv_col_idx[ln] + 1] = cv_pred
-        pv_seq   = plant_model.predict(x_cv_b, xct_b, pv_init_b, sc_b)
+        pv_seq, _ = plant_model.predict(x_cv_b, xct_b, pv_init_b, sc_b)
         pv_preds_te[i:i + pv_seq.size(0)] = pv_seq.cpu().numpy()
 
 SCENARIO_SHORT = {0: "Normal", 1: "AP_no", 2: "AP_with", 3: "AE_no"}

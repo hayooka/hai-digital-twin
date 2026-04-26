@@ -1,0 +1,82 @@
+{
+  "threshold": 0.35,
+  "hparams": {
+    "n_estimators": 129,
+    "max_depth": 4,
+    "learning_rate": 0.08897465218390536,
+    "random_state": 42,
+    "eval_metric": "logloss",
+    "n_jobs": -1
+  },
+  "n_features": 133,
+  "A": {
+    "n_train": 199078,
+    "n_test": 85320,
+    "n_train_attack": 6892,
+    "n_test_attack": 4492,
+    "f1": 0.260345010053974,
+    "precision": 0.24813395198708896,
+    "recall": 0.27382012466607303,
+    "auroc": 0.6904604173936886,
+    "avg_precision": 0.15575033337502958,
+    "threshold": 0.35,
+    "confusion_matrix": [
+      [
+        77101,
+        3727
+      ],
+      [
+        3262,
+        1230
+      ]
+    ],
+    "fit_time_s": 1.41
+  },
+  "B": {
+    "n_train": 199078,
+    "n_test": 36000,
+    "n_train_attack": 6892,
+    "n_test_attack": 27000,
+    "f1": 0.30090253234804454,
+    "precision": 0.7117590161669199,
+    "recall": 0.19077777777777777,
+    "auroc": 0.4138970288065844,
+    "avg_precision": 0.6960795566720102,
+    "threshold": 0.35,
+    "confusion_matrix": [
+      [
+        6914,
+        2086
+      ],
+      [
+        21849,
+        5151
+      ]
+    ],
+    "fit_time_s": 1.38
+  },
+  "C": {
+    "n_train": 36000,
+    "n_test": 85320,
+    "n_train_attack": 27000,
+    "n_test_attack": 4492,
+    "f1": 0.09535029846057179,
+    "precision": 0.05020559599205974,
+    "recall": 0.9459038290293855,
+    "auroc": 0.36917168079522095,
+    "avg_precision": 0.03999333437370527,
+    "threshold": 0.35,
+    "confusion_matrix": [
+      [
+        445,
+        80383
+      ],
+      [
+        243,
+        4249
+      ]
+    ],
+    "fit_time_s": 0.43
+  },
+  "_D_note": "Experiment D (Mixed -> Real) is the live Guardian in the dashboard."
+}

@@ -1,0 +1,280 @@
+{
+  "items": [
+    {
+      "loop": "PC",
+      "injection_point": "SP",
+      "attack_type": "bias",
+      "magnitude": 0.05,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 0.35345458984375
+    },
+    {
+      "loop": "PC",
+      "injection_point": "SP",
+      "attack_type": "freeze",
+      "magnitude": 0.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 0.0
+    },
+    {
+      "loop": "PC",
+      "injection_point": "CV",
+      "attack_type": "bias",
+      "magnitude": 0.05,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 0.001800537109375
+    },
+    {
+      "loop": "PC",
+      "injection_point": "CV",
+      "attack_type": "freeze",
+      "magnitude": 0.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 1.0328369140625
+    },
+    {
+      "loop": "PC",
+      "injection_point": "PV",
+      "attack_type": "bias",
+      "magnitude": 0.05,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 0.124664306640625
+    },
+    {
+      "loop": "PC",
+      "injection_point": "PV",
+      "attack_type": "freeze",
+      "magnitude": 0.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 0.074615478515625
+    },
+    {
+      "loop": "LC",
+      "injection_point": "SP",
+      "attack_type": "bias",
+      "magnitude": 20.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 2.10687255859375
+    },
+    {
+      "loop": "LC",
+      "injection_point": "SP",
+      "attack_type": "freeze",
+      "magnitude": 0.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 0.0
+    },
+    {
+      "loop": "LC",
+      "injection_point": "CV",
+      "attack_type": "bias",
+      "magnitude": 20.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 4.7835693359375
+    },
+    {
+      "loop": "LC",
+      "injection_point": "CV",
+      "attack_type": "freeze",
+      "magnitude": 0.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 2.3023681640625
+    },
+    {
+      "loop": "LC",
+      "injection_point": "PV",
+      "attack_type": "bias",
+      "magnitude": 20.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 1.1796875
+    },
+    {
+      "loop": "LC",
+      "injection_point": "PV",
+      "attack_type": "freeze",
+      "magnitude": 0.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 0.31170654296875
+    },
+    {
+      "loop": "FC",
+      "injection_point": "SP",
+      "attack_type": "bias",
+      "magnitude": 50.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 2.31378173828125
+    },
+    {
+      "loop": "FC",
+      "injection_point": "SP",
+      "attack_type": "freeze",
+      "magnitude": 0.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 0.0
+    },
+    {
+      "loop": "FC",
+      "injection_point": "CV",
+      "attack_type": "bias",
+      "magnitude": 50.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 32.0665283203125
+    },
+    {
+      "loop": "FC",
+      "injection_point": "CV",
+      "attack_type": "freeze",
+      "magnitude": 0.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 0.77392578125
+    },
+    {
+      "loop": "FC",
+      "injection_point": "PV",
+      "attack_type": "bias",
+      "magnitude": 50.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 2.9969482421875
+    },
+    {
+      "loop": "FC",
+      "injection_point": "PV",
+      "attack_type": "freeze",
+      "magnitude": 0.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 0.26422119140625
+    },
+    {
+      "loop": "TC",
+      "injection_point": "SP",
+      "attack_type": "bias",
+      "magnitude": 2.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 1.07452392578125
+    },
+    {
+      "loop": "TC",
+      "injection_point": "SP",
+      "attack_type": "freeze",
+      "magnitude": 0.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 0.0
+    },
+    {
+      "loop": "TC",
+      "injection_point": "CV",
+      "attack_type": "bias",
+      "magnitude": 2.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 0.03582763671875
+    },
+    {
+      "loop": "TC",
+      "injection_point": "CV",
+      "attack_type": "freeze",
+      "magnitude": 0.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 0.2100830078125
+    },
+    {
+      "loop": "TC",
+      "injection_point": "PV",
+      "attack_type": "bias",
+      "magnitude": 2.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 0.24945068359375
+    },
+    {
+      "loop": "TC",
+      "injection_point": "PV",
+      "attack_type": "freeze",
+      "magnitude": 0.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 0.02703857421875
+    },
+    {
+      "loop": "CC",
+      "injection_point": "SP",
+      "attack_type": "bias",
+      "magnitude": 2.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 1.657257080078125
+    },
+    {
+      "loop": "CC",
+      "injection_point": "SP",
+      "attack_type": "freeze",
+      "magnitude": 0.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 0.0
+    },
+    {
+      "loop": "CC",
+      "injection_point": "CV",
+      "attack_type": "bias",
+      "magnitude": 2.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 0.0789794921875
+    },
+    {
+      "loop": "CC",
+      "injection_point": "CV",
+      "attack_type": "freeze",
+      "magnitude": 0.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 0.62762451171875
+    },
+    {
+      "loop": "CC",
+      "injection_point": "PV",
+      "attack_type": "bias",
+      "magnitude": 2.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 1.21759033203125
+    },
+    {
+      "loop": "CC",
+      "injection_point": "PV",
+      "attack_type": "freeze",
+      "magnitude": 0.0,
+      "start_offset": -30,
+      "duration": 90,
+      "peak_dpv": 0.0
+    }
+  ],
+  "meta": {
+    "cursor": 1000,
+    "start_offset": -30,
+    "duration": 90,
+    "n": 30
+  }
+}

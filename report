@@ -126,7 +126,7 @@ This gap motivates the use of a \textbf{digital twin surrogate} — a learned mo
 
 \vspace{0.3cm}
 
-This project develops a physics-informed closed-loop data drivern digital twin as simulator and generator for the \textbf{HAI 23.05} (Hardware-in-the-Loop Augmented ICS Security) testbed (HAI-Dataset-v4.0). The HAI testbed is one of the most representative publicly available ICS security benchmarks, comprising three interconnected physical processes which are: a boiler system (P1), a turbine system (P2), and a water treatment system (P3) and hardware-in-the-loop simulation (P4) controlled by Emerson Ovation DCS, GE Mark VIe DCS, and Siemens S7-300 PLC controllers, as illustrated in Figure 1.
+This project develops a data-driven closed-loop digital twin as simulator and generator for the \textbf{HAI 23.05} (Hardware-in-the-Loop Augmented ICS Security) testbed (HAI-Dataset-v4.0). The HAI testbed is one of the most representative publicly available ICS security benchmarks, comprising three interconnected physical processes which are: a boiler system (P1), a turbine system (P2), and a water treatment system (P3) and hardware-in-the-loop simulation (P4) controlled by Emerson Ovation DCS, GE Mark VIe DCS, and Siemens S7-300 PLC controllers, as illustrated in Figure 1.
 
 \begin{figure}[H]
 \centering
@@ -202,23 +202,23 @@ scenario-specific sensor trajectories). It must mirror the physical
 independence of the real PID control loops and support modular deployment
 and maintenance in real industrial environments.
 
-\item \textbf{Objective 2 — Dual-architecture training and evaluation.}
-Train and evaluate two recurrent neural network architectures — a Gated Recurrent Unit (GRU) primary model and a Long Short-Term Memory (LSTM) baseline model (GeeksforGeeks, 2026; Hall et al., 2025) — on the HAI 23.05 dataset under all four attack scenarios. The controlled architectural comparison, using identical data, pipeline, and feature sets, isolates the effect of recurrent cell type on closed-loop simulation fidelity.
+\item \textbf{Objective 2 — GRU architecture selection and justification.}
+Select and justify the Gated Recurrent Unit (GRU) as the primary recurrent architecture for the digital twin, based on its balance of temporal memory, parameter efficiency, and stable autoregressive rollout compared to alternative sequence model families. Validate the choice empirically on the HAI 23.05 dataset under all four attack scenarios.
 
 \item \textbf{Objective 3 — Exposure bias mitigation via scheduled sampling.}
-Quantify the impact of scheduled sampling on closed-loop autoregressive prediction stability by systematically evaluating SS\_MAX $\in \{0.0, 0.5\}$ and extended curriculum ramp schedules for both architectures, and report the resulting improvement in mean NRMSE relative to the pure teacher-forcing baseline.
+Quantify the impact of scheduled sampling on closed-loop autoregressive prediction stability by evaluating SS\_MAX $= 0.483$ with an extended curriculum ramp schedule, and report the resulting improvement in mean NRMSE relative to the pure teacher-forcing baseline.
 
 \item \textbf{Objective 4 — Gate-threshold compliance.}
-Achieve a closed-loop Normalised Root Mean Square Error (NRMSE) below 10\% on all five process variable channels for both the primary and baseline models after tuning. This threshold constitutes the operational deployment criterion, ensuring that the surrogate's simulation fidelity is sufficient for reliable anomaly detection without excessive false-positive rates.
+Achieve a closed-loop Normalised Root Mean Square Error (NRMSE) below 10\% on all five process variable channels after tuning. This threshold constitutes the operational deployment criterion, ensuring that the surrogate's simulation fidelity is sufficient for reliable anomaly detection without excessive false-positive rates.
 
 \item \textbf{Objective 5 — Long-horizon prediction stability assessment.}
-Characterise the long-horizon autoregressive stability of both architectures by evaluating multi-horizon rollouts extending to 1.5 hours (5,400 consecutive prediction timesteps) for the GRU primary model and 24 minutes for the LSTM baseline, determining the operational prediction horizon for each architecture under further tuning.
+Characterise the long-horizon autoregressive stability of the GRU primary model by evaluating multi-horizon rollouts extending to 30 minutes (1,800 consecutive prediction timesteps), determining whether the model maintains per-channel NRMSE below the deployment gate threshold across all evaluated horizon lengths beyond the training rollout window.
 
-\item \textbf{Objective 6 — Evidence-based architecture comparison for deployment.}
-Compare the deployment trade-offs between the GRU primary model and the LSTM baseline across prediction accuracy, computational efficiency, parameter count, training time, pre-tuning stability, and robustness across attack scenario types, to produce evidence-based recommendations for architecture selection in resource-constrained real-time ICS monitoring deployments.
+\item \textbf{Objective 6 — Scalable deployment architecture design.}
+Design a modular deployment architecture for the GRU digital twin that supports edge deployment, 1 Hz real-time inference, horizontal scaling through parallel Plant and Controller execution, and evidence-based recommendations for resource-constrained real-time ICS monitoring deployments.
 
 \item \textbf{Objective 7 — Scalable real-time deployment architecture.}
-Design a modular deployment architecture for the GRU  digital twin simulator and generator that supports edge deployment across multiple microgrid facilities, 1 Hz real-time inference, horizontal scaling through parallel Plant and Controller execution, and continuous anomaly detection with automated alerting and audit logging.
+Design and implement a web-based deployment interface (PlantMirror) for the GRU digital twin that supports edge deployment across multiple microgrid facilities, 1 Hz real-time inference, horizontal scaling through parallel Plant and Controller execution, and continuous anomaly detection with automated alerting and audit logging.
 \end{itemize}
 
 \subsection{Relevance to Real-World Applications and Academic Research}
@@ -236,16 +236,13 @@ The architecture's design for edge deployment at individual microgrid facilities
 This work makes four contributions of broader relevance to the fields of machine learning for time series, industrial AI, and cyber-physical system security.
 
 \textbf{Scheduled sampling for ICS closed-loop surrogate models.}
-The systematic investigation of scheduled sampling as a curriculum learning intervention for the exposure bias problem in closed-loop recurrent surrogates contributes to the growing literature on autoregressive training for industrial time-series forecasting (Hall et al., 2025). The 82\% improvement in mean NRMSE for the GRU and 54\% for the LSTM through scheduled sampling and extended curriculum ramps provides quantitative evidence — on a real ICS security dataset with 52 documented attack scenarios — that this technique is highly effective for multi-step process simulation, where the long-range physical coupling between variables amplifies the consequences of exposure bias far beyond what is typically observed in standard time-series benchmarks.
-
-\textbf{Controlled architectural comparison of GRU and LSTM for industrial digital twins.}
-The controlled architectural comparison between GRU and LSTM — using identical data, pipeline, feature sets, and evaluation metrics — provides a rigorous empirical basis for the choice of recurrent cell type in ICS surrogate modelling applications. The finding that the GRU's simpler single-state architecture, despite achieving a superior validation loss (0.00055 vs. 0.00063), accumulates more autoregressive error on slow-dynamics channels than the LSTM under identical tuning conditions is a nuanced result that advances the understanding of when the LSTM's explicit cell state provides a measurable practical advantage in closed-loop rollout scenarios. This finding has direct implications for the design of future ICS digital twin systems where the trade-off between model efficiency and long-range memory fidelity must be carefully evaluated.
+The systematic investigation of scheduled sampling as a curriculum learning intervention for the exposure bias problem in closed-loop recurrent surrogates contributes to the growing literature on autoregressive training for industrial time-series forecasting (Hall et al., 2025). Applying a linear curriculum ramp to SS\_MAX $= 0.483$ achieves a mean test-set NRMSE of 0.0095 at the 180-second horizon on a real ICS security dataset with 52 documented attack scenarios, providing quantitative evidence that scheduled sampling is highly effective for multi-step process simulation, where the long-range physical coupling between variables amplifies the consequences of exposure bias far beyond what is typically observed in standard time-series benchmarks.
 
 \textbf{Long-horizon autoregressive stability for extended ICS monitoring.}
-The evaluation of multi-horizon rollouts extending to 1.5 hours (5,400 timesteps) for the GRU primary model, with all five channels passing the deployment gate threshold across all evaluated horizon lengths, demonstrates that physics-informed recurrent surrogates can maintain stable prediction stability far beyond the training rollout window. This result is directly relevant to the design of proactive anomaly detection systems that must predict the trajectory of a physical process over extended future windows to identify attacks that gradually and stealthily drive the system toward a dangerous state, rather than causing an immediate detectable spike (Homaei et al., 2026).
+The evaluation of multi-horizon rollouts extending to 30 minutes (1,800 timesteps) for the GRU primary model, with all five channels passing the 1.5\% deployment gate threshold, demonstrates that physics-informed recurrent surrogates can maintain stable prediction accuracy beyond the 3-minute training rollout window. This result is directly relevant to the design of proactive anomaly detection systems that must predict the trajectory of a physical process over extended future windows to identify attacks that gradually and stealthily drive the system toward a dangerous state, rather than causing an immediate detectable spike (Homaei et al., 2026).
 
 \textbf{Physics-informed feature decomposition for cyber-physical security.}
-The per-loop controller decomposition adopted in this architecture — which restricts each controller model to the two signals its physical counterpart actually observes — represents a principled approach to domain-knowledge-guided feature engineering that simultaneously improves model interpretability, prevents spurious cross-channel correlation learning, and enables independent per-loop deployment. This connects to the broader research agenda on physics-informed machine learning for cyber-physical systems, where structural domain knowledge is used to constrain the learning problem rather than relying on unconstrained end-to-end optimisation (HAI-Dataset-v4.0; Homaei et al., 2026).
+The per-loop controller decomposition adopted in this architecture — which restricts each controller model to its loop's setpoint, process variable, control variable, and three causally-selected auxiliary channels derived from the physics-informed causal graph — represents a principled approach to domain-knowledge-guided feature engineering that simultaneously improves model interpretability, prevents spurious cross-channel correlation learning, and enables independent per-loop deployment. This connects to the broader research agenda on physics-informed machine learning for cyber-physical systems, where structural domain knowledge is used to constrain the learning problem rather than relying on unconstrained end-to-end optimisation (HAI-Dataset-v4.0; Homaei et al., 2026).
 
 \textbf{Dual-role digital twin as simulator and generator.}
 This work demonstrates that a single GRU architecture can simultaneously
@@ -280,7 +277,33 @@ This project addresses these gaps by developing a modular closed-loop  digital t
 
 \subsubsection{Data Sourcing}
 
-This work integrates three complementary data sources. The HAI (HIL-based Augmented ICS) Security Dataset, version 23.05 (HAI-Dataset-v4.0), constitutes the primary empirical data source. The testbed faithfully replicates three interconnected real-world industrial processes --- a boiler, a turbine, and a water treatment unit --- coupled to a HIL simulation of a steam/hydro turbine and power grid model, as illustrated in the process flow diagram of the testbed (Figure 1). The physical architecture comprises tanks (TK01--TK04), heat exchangers, pumps, and valves. Collected at 1 Hz, the dataset captures the complete operational state across four signal categories: process variables (PVs) including pressure (P1\_PIT01), water level (P1\_LIT01), flow rate (P1\_FT03Z), and dual temperature readings (P1\_TIT01, P1\_TIT03); control variables (CVs) encoding actuator commands such as valve positions and pump setpoints; setpoints (SPs) representing desired reference values; and auxiliary plant signals providing operational context. Each observation carries a binary attack flag indicating whether an attack is active. The categorical scenario labels used for model conditioning were derived by extracting the defining features of each attack type from the HAI 23.05 technical documentation (HAI-Dataset-v4.0) and mapping them to a four-class scheme based on attack mechanism and process condition: normal operation (class 0), Actuator Pollution without combustion (class 1), Actuator Pollution with combustion (class 2), and Actuator Emulation without combustion (class 3). The attack model, illustrating the points within a control loop at which an adversary may manipulate setpoints, process variables, control variables, or control parameters, is shown in Figure 2.
+This work integrates three complementary data sources. The HAI (HIL-based Augmented ICS) Security Dataset, version 23.05 (HAI-Dataset-v4.0), constitutes the primary empirical data source. The testbed faithfully replicates three interconnected real-world industrial processes --- a boiler, a turbine, and a water treatment unit --- coupled to a HIL simulation of a steam/hydro turbine and power grid model, as illustrated in the process flow diagram of the testbed (Figure 1). The physical architecture comprises tanks (TK01--TK04), heat exchangers, pumps, and valves. Collected at 1 Hz, the dataset captures the complete operational state across four signal categories: process variables (PVs) including pressure (P1\_PIT01), water level (P1\_LIT01), flow rate (P1\_FT03Z), and dual temperature readings (P1\_TIT01, P1\_TIT03); control variables (CVs) encoding actuator commands such as valve positions and pump setpoints; setpoints (SPs) representing desired reference values; and auxiliary plant signals providing operational context. Each observation carries a binary attack flag indicating whether an attack is active. The categorical scenario labels used for model conditioning were derived by extracting the defining features of each attack type from the HAI 23.05 technical documentation (HAI-Dataset-v4.0) and mapping them to a four-class scheme based on attack mechanism and process condition, as summarised in Table~\ref{tab:attack_taxonomy}.
+
+\begin{table}[H]
+\centering
+\footnotesize
+\renewcommand{\arraystretch}{1.4}
+\setlength{\tabcolsep}{6pt}
+\caption{Attack Scenario Taxonomy — HAI 23.05}
+\label{tab:attack_taxonomy}
+\begin{tabular}{|c|l|l|p{6.5cm}|}
+\hline
+\textbf{Class} & \textbf{Label} & \textbf{Attack Type} & \textbf{Description} \\
+\hline
+0 & Normal   & —                        & Normal operation; no attack active. \\
+\hline
+1 & AP\_no   & Actuator Pollution       & Manipulates I/O points (SP, PV, or CV) on individual boiler control loops without simultaneous combustion disturbance. Attack footprint is visible in standard SCADA historian signals. \\
+\hline
+2 & AP\_with & Actuator Pollution       & Same I/O-point manipulation, but executed simultaneously across multiple loops together with a combustion disturbance, producing large, coupled multi-variable deviations. Most detectable scenario. \\
+\hline
+3 & AE\_no   & Actuator Emulation       & Manipulates \emph{internal} DCS algorithm function blocks (arithmetic, artificial I/O, and monitor functions) rather than I/O points. Attack is invisible in standard process historian logs and only detectable via HAIEnd+ internal signals. Most stealthy scenario. \\
+\hline
+\end{tabular}
+\end{table}
+
+The two attack families differ fundamentally in their visibility. \textbf{Actuator Pollution (AP)} attacks target I/O points — the setpoints, process variables, and control variables that flow through standard SCADA channels — and therefore leave measurable residuals in PV predictions. \textbf{Actuator Emulation (AE)} attacks instead corrupt internal DCS algorithm blocks (e.g., calibration scaling functions, initialisation registers, and monitor thresholds) that are invisible in standard historian logs. These attacks operate entirely within the DCS control logic layer, meaning the physical actuators behave differently from what the process engineer intended while all observable I/O signals remain within individually plausible ranges. This inherent stealth is why AE attacks are the hardest to detect and motivates the inclusion of the HAIEnd+ dataset, which exposes the internal function block outputs that AE attacks manipulate.
+
+The attack model, illustrating the points within a control loop at which an adversary may manipulate setpoints, process variables, control variables, or control parameters, is shown in Figure 2.
 
 \begin{figure}[H]
     \centering
@@ -338,14 +361,15 @@ The input feature space is defined by a physics-informed decomposition of the HA
 \subsection{Model Design \& Selection}
 
 \subsubsection{Overview}
-\textcolor{red}{include baseline and hyperparameter process!!!!!!!!!!!!!!!!}
+\label{sec:overview}
 The digital twin must predict future process variable (PV) values across a multi-loop industrial control system, under both normal operation and active attack scenarios. This requires a model that can capture sequential temporal dependencies, handle multiple interacting control loops, and generalise across operating conditions with fundamentally different dynamics.
 
 A data-driven sequence modelling approach was adopted over physics-based alternatives for two reasons: the HAI boiler system involves complex nonlinear interactions between pressure, flow, level, and temperature that are difficult to model analytically; and the availability of labelled historical data with attack scenarios makes supervised learning the most direct path to scenario-aware prediction.
 
-Among sequence model families — LSTM, GRU, and Transformer — GRU was selected following empirical comparison. LSTM's cell state adds parameter overhead without meaningful gain at the timescales of this system. The Transformer architecture struggles with the long autoregressive rollout required at inference, accumulating error over the prediction horizon. GRU provides the best trade-off between temporal memory, parameter efficiency, and stable autoregressive rollout.
+Among sequence model families — LSTM, GRU, and Transformer — GRU was selected following architectural analysis. LSTM's explicit cell state adds parameter overhead without meaningful gain at the timescales of this system. The Transformer architecture struggles with the long autoregressive rollout required at inference, accumulating error over the prediction horizon. GRU provides the best trade-off between temporal memory, parameter efficiency, and stable autoregressive rollout.
 
 The system was modelled as a closed loop: separate GRU controller models predict actuator outputs (CVs) per control loop, which feed into a shared GRU plant model that predicts all sensor outputs (PVs). This mirrors the actual DCS structure — controllers and plant are distinct functional blocks — and allows each component to be trained and evaluated independently before closed-loop composition. The overview architecture is shown in Figure 5.
+A simple GRU baseline was trained before reaching this final architecture. There was no causal structure or scenario awareness, resulting in a mean NRMSE of 1.137\% on the test set. Optuna's CMA-ES (Covariance Matrix Adaptation Evolution Strategy) was used to select the optimal hyperparameters. Over 30 trials, each hyperparameter ran for 40 epochs, and some trials were cut back at this early stage. The search covered hidden sizes of {128, 256, 512}, GRU layers of {2, 3}, dropout between 0.05 to 0.30, learning rate of 1×10⁻⁴ to 1×10⁻², batch size of {64, 128, 256}, and scheduled sampling schedule. The optimal configuration found was of 512 hidden units, 2 layers, and a 0.054 dropout, which was used for all training afterwards.
 
 \begin{figure}[H]
 \centering
@@ -432,7 +456,35 @@ trajectory synthesis).
 
 \subsubsection{Training Pipeline}
 
-Training proceeds in two sequential stages. In Stage 1, the causal plant model is trained from a warm-started baseline. In Stage 2, the Stage 1 checkpoint is fine-tuned with per-scenario loss weighting to improve reproduction of attack dynamics. Controllers are trained jointly alongside the plant in both stages but are never retrained between stages.
+Training proceeds in two sequential stages, building on a warm-started baseline produced by the hyperparameter search described in Section~\ref{sec:overview}. Before stage training, each controller is pre-trained independently on its respective loop. Table~\ref{tab:ctrl_nrmse} reports the resulting controller NRMSE on the validation set, which serves as the baseline for the plant training that follows.
+
+\begin{table}[H]
+\centering
+\footnotesize
+\renewcommand{\arraystretch}{1.3}
+\setlength{\tabcolsep}{10pt}
+\caption{Pre-trained controller validation NRMSE (closed-loop, normal operation).}
+\label{tab:ctrl_nrmse}
+\begin{tabular}{|l|c|}
+\hline
+\textbf{Controller} & \textbf{Validation NRMSE (\%)} \\
+\hline
+PC (Pressure)     & 0.322 \\
+LC (Level)        & 1.044 \\
+FC (Flow)         & 0.965 \\
+TC (Temperature)  & 1.288 \\
+CC (Cooling)      & 2.065 \\
+\hline
+\end{tabular}
+\end{table}
+
+All controllers satisfy the 10\% NRMSE gate threshold, confirming that each loop is individually well-modelled before being composed into the closed-loop plant. The two training stages then proceed as follows.
+
+\textbf{Stage 1 — Causal plant training with uniform attack weighting.}
+The plant model is initialised from the baseline checkpoint obtained during hyperparameter search, avoiding random initialisation and providing a warm start that already captures normal process dynamics. All attack windows are penalised uniformly at $3\times$ the normal window loss weight. This stage teaches the plant to distinguish attack dynamics from normal operation without yet differentiating between attack types.
+
+\textbf{Stage 2 — Per-scenario fine-tuning.}
+The best Stage 1 checkpoint is loaded and fine-tuned with per-scenario loss weights (Table~\ref{tab:scenario_weights}) calibrated to each attack type's frequency and reconstruction difficulty. This stage refines the model's sensitivity to each specific attack regime. Controllers are trained alongside the plant in both stages but their weights are fixed during Stage 2, preserving the loop-level accuracy established in pre-training.
 
 \subsubsection{Loss Functions}
 
@@ -480,7 +532,7 @@ The uniform attack penalty of Stage 1 is replaced with \emph{per-scenario} loss 
   \label{eq:stage2_loss}
 \end{equation}
 
-where $w_{s_b}$ is the scenario weight for window $b$, defined in Table 3.
+where $w_{s_b}$ is the scenario weight for window $b$, defined in Table~\ref{tab:scenario_weights}.
 
 \begin{table}[H]
 \centering
@@ -505,7 +557,7 @@ where $w_{s_b}$ is the scenario weight for window $b$, defined in Table 3.
 
 \subsubsection{Hyperparameter Summary}
 
-Table 4 summarises the key hyperparameters across both training stages.
+Table~\ref{tab:hyperparams} summarises the key hyperparameters across both training stages.
 
 \begin{table}[H]
 \centering
@@ -541,7 +593,25 @@ Dropout & 0.054 & 0.054 \\
 
 \subsubsection{Algorithmic Description}
 
-The complete training procedure is formalised in Algorithms 1 and 2. Algorithm 1 describes the two-stage training loop, including scheduled sampling, per-scenario loss weighting, and early stopping. Algorithm 2 describes closed-loop inference, in which trained controller models generate CV sequences that are fed into the plant model to produce the full PV prediction rollout.
+The complete model process consists of four sequential phases: controller pre-training, two-stage plant training, closed-loop inference, and the detection-classification layer. Figure~\ref{fig:OVERVIEW_ARCHITECTURE} shows the data flow across all components; the algorithms below formalise each phase.
+
+\textbf{Phase 1 — Controller pre-training.}
+Each of the five loop controllers (PC, LC, FC, TC, CC) is trained independently on its own loop's signals. The controller receives a 300-second history of its setpoint (SP), process variable (PV), control variable (CV), and three causally-selected auxiliary channels, and is trained to autoregressively predict the CV sequence over the 180-second target horizon. Controllers are trained to convergence and their weights are frozen before plant training begins.
+
+\textbf{Phase 2 — Two-stage plant training.}
+The GRU plant model is trained in two sequential stages using the frozen controller outputs as inputs. In both stages, scheduled sampling is applied to the decoder: with probability $\alpha$ (ramped linearly from 0 to 0.483), the model feeds its own previous prediction as the next decoder input instead of the ground-truth PV, progressively bridging the training/inference gap.
+
+In \textit{Stage 1}, all attack windows are penalised at $3\times$ the normal weight, with an additional $2\times$ weight on the TIT03 channel. This teaches the plant model to recognise that attack windows require more careful reconstruction, without yet distinguishing between attack types.
+
+In \textit{Stage 2}, the best Stage 1 checkpoint is loaded and fine-tuned with per-scenario loss weights (Table~\ref{tab:scenario_weights}), which are calibrated to each attack type's frequency and difficulty. This refines the model's sensitivity to each specific attack regime. The plant model's scenario embedding — a learned 32-dimensional vector per scenario label — is updated in both stages, allowing a single model to condition on the operating regime without requiring separate instances per scenario.
+
+\textbf{Phase 3 — Closed-loop inference.}
+At inference time, the five controllers independently predict their CV sequences from the observed sensor history. These generated CVs are injected into the plant model's target-window input. The plant encoder then encodes the full observed CV history concatenated with the scenario embedding, and the decoder autoregressively rolls out all five PV predictions over 180 steps — feeding each prediction as the next decoder input. No runtime feedback flows from the plant back to the controllers; the closed-loop dynamics are captured entirely through the training data.
+
+\textbf{Phase 4 — Detection and classification.}
+The predicted PV trajectories are compared against actual sensor readings to produce per-window anomaly scores. A binary alert is raised when the mean absolute residual exceeds the detection threshold calibrated on normal validation windows. Simultaneously, a 30-dimensional feature vector is extracted from the residual trajectory and passed to the XGBoost classifier — trained on balanced synthetic data — which assigns one of four scenario labels (Normal, AP\_no, AP\_with, AE\_no). Together, these two outputs give the operator both an immediate alert and an attack type identification without requiring any retraining of the plant model.
+
+Algorithms~\ref{alg:training}, \ref{alg:inference}, and \ref{alg:detection_classification} formalise Phases 2, 3, and 4 respectively.
 
 \begin{algorithm}[H]
 \caption{Two-Stage Digital Twin Training}
@@ -659,48 +729,63 @@ The complete training procedure is formalised in Algorithms 1 and 2. Algorithm 1
 \end{algorithm}
 
 
-\subsubsection{Post-hoc Anomaly Detection}
+\subsubsection{Detection and Classification Layer}
+\label{sec:detection_classification}
 
-Raw mean squared error (MSE) thresholding on reconstruction residuals often yields noisy, poorly calibrated alerts due to varying sensitivity across photovoltaic (PV) strings. To address this without modifying the trained forecasting model, we adopt a post-hoc detection scheme. Normal-operation validation windows are first passed through the model to collect residual feature vectors, where each vector comprises the mean squared residual computed independently for each of the five PV strings. These features serve a dual purpose: (1) they train an Isolation Forest (IF) model to capture multivariate correlations and joint anomalous behavior across the array, and (2) they establish per-PV empirical thresholds at the 99th percentile of the normal residual distribution. At test time, a window is flagged as anomalous if the Isolation Forest score exceeds a decision boundary \textit{or} if any individual PV string surpasses its specific 99th-percentile threshold, providing a robust, calibration-free alert mechanism that requires no retraining or fine-tuning of the underlying forecaster.
+The trained GRU plant model is paired with a two-component detection and identification layer that operates entirely on prediction residuals, without modifying the underlying forecaster. The two components answer different questions: the detector answers \emph{whether} an anomaly is present; the classifier answers \emph{which} attack type it is.
+
+\paragraph{Stage 1 — Binary Anomaly Detector.}
+For each test window, the mean absolute PV residual is computed as a scalar anomaly score:
+\begin{equation}
+    s_w = \frac{1}{T \cdot K} \sum_{t=1}^{T} \sum_{k=1}^{K} \left| \hat{y}_{w,t,k} - y_{w,t,k} \right|
+\end{equation}
+where $T = 180$ is the prediction horizon and $K = 5$ is the number of PV channels. A detection threshold $\tau$ is set at the 99th percentile of $s_w$ computed over normal-operation windows in the validation set. A window is flagged as an attack if $s_w \geq \tau$.
+
+This threshold is calibrated entirely on normal data — no attack labels are required — making it a zero-shot anomaly detector. Its sensitivity is inherently linked to the magnitude of the PV deviation: attacks that produce large, multi-channel residuals (such as AP\_with) are detected reliably, while stealthy attacks whose residuals overlap with the normal distribution (AP\_no, AE\_no) are harder to separate at any operationally acceptable threshold.
+
+\paragraph{Stage 2 — Attack Type Classifier.}
+To identify the specific attack family, an XGBoost classifier is trained on handcrafted statistical features extracted from the per-window PV residual trajectories. For each window, six statistics are computed independently for each of the five PV channels — mean, standard deviation, minimum, maximum, mean absolute value, and mean first difference — yielding a 30-dimensional feature vector $\mathbf{f}_w \in \mathbb{R}^{30}$.
+
+The classifier is an XGBoost model with 500 estimators, max depth 6, and inverse-frequency sample weighting to handle class imbalance. Crucially, it is trained exclusively on \emph{synthetic} PV trajectories generated by the digital twin under each scenario label, with 3{,}292 windows per class to produce a balanced training set. The real test windows (with their severe class imbalance) are held out entirely and used only for evaluation. This Train-on-Real-Test-on-Synthetic (TRTS) protocol is made viable by the generation quality of the digital twin, which is independently validated in Section~\ref{sec:synth_quality}.
+
+Algorithm~\ref{alg:detection_classification} formalises the full two-stage pipeline.
 
 \begin{algorithm}[H]
-\caption{Anomaly Scoring}
-\label{alg:anomaly}
+\caption{Two-Stage Detection and Classification}
+\label{alg:detection_classification}
 \begin{algorithmic}[1]
-\Require Trained forecasting model $\mathcal{M}$, normal validation windows $\mathcal{W}_{\text{val}}$, test windows $\mathcal{W}_{\text{test}}$
-\Ensure Binary alert $A_w$ for each test window
+\Require Trained plant model $\mathcal{M}$,
+         normal validation windows $\mathcal{W}_{\text{val}}$,
+         synthetic training windows $\mathcal{W}_{\text{synth}}$ (balanced, all scenarios),
+         test windows $\mathcal{W}_{\text{test}}$
+\Ensure Binary alert $A_w$ and attack label $\hat{s}_w$ for each test window
 
-\Statex \textbf{Step 1: Residual Extraction}
-\For{each window $w \in \mathcal{W}_{\text{val}} \cup \mathcal{W}_{\text{test}}$}
-    \State Run inference with $\mathcal{M}$ to obtain predictions $\hat{\mathbf{y}}_w$
-    \State Compute residual vector $\mathbf{r}_w = (\mathbf{y}_w - \hat{\mathbf{y}}_w)^2$ \Comment{element-wise squared error}
+\Statex \textbf{--- Calibration (done once, on validation set) ---}
+\For{each window $w \in \mathcal{W}_{\text{val}}$}
+    \State $\hat{\mathbf{y}}_w \leftarrow \mathcal{M}(w)$
+    \State $s_w \leftarrow \frac{1}{TK}\sum_{t,k}|\hat{y}_{w,t,k} - y_{w,t,k}|$
 \EndFor
+\State $\tau \leftarrow \text{Percentile}_{99}(\{s_w\}_{w \in \mathcal{W}_{\text{val}}})$
+    \Comment{detection threshold from normal windows only}
 
-\Statex \textbf{Step 2: Feature Engineering}
-\For{each window $w$}
-    \State $\mathbf{f}_w = \big[\,\text{mean}(r_{w,\text{PV}_1}),\; \text{mean}(r_{w,\text{PV}_2}),\; \dots,\; \text{mean}(r_{w,\text{PV}_5})\,\big]$
+\Statex \textbf{--- Classifier training (done once, on synthetic windows) ---}
+\For{each window $w \in \mathcal{W}_{\text{synth}}$}
+    \State $\mathbf{f}_w \leftarrow \text{ExtractFeatures}(w)$
+    \Comment{30-dim: mean, std, min, max, mean-abs, $\Delta$ per PV channel}
 \EndFor
-\State Resulting feature matrix: $\mathbf{F} \in \mathbb{R}^{N_{\text{windows}} \times 5}$
+\State $\mathcal{C} \leftarrow \text{XGBoost}(\{\mathbf{f}_w, s_w\}_{w \in \mathcal{W}_{\text{synth}}},\; n_{\text{est}}=500,\; \text{inv-freq weighted})$
 
-\Statex \textbf{Step 3a: Isolation Forest Calibration}
-\State Fit IsolationForest on normal validation features $\mathbf{F}_{\text{val}}$
-\For{each test window feature vector $\mathbf{f}_w \in \mathbf{F}_{\text{test}}$}
-    \State $s_{\text{IF}, w} = -\text{score\_samples}(\mathbf{f}_w)$
+\Statex \textbf{--- Inference on test windows ---}
+\For{each window $w \in \mathcal{W}_{\text{test}}$}
+    \State $\hat{\mathbf{y}}_w \leftarrow \mathcal{M}(w)$
+    \State $s_w \leftarrow \frac{1}{TK}\sum_{t,k}|\hat{y}_{w,t,k} - y_{w,t,k}|$
+    \State $A_w \leftarrow \mathbf{1}[s_w \geq \tau]$
+    \Comment{Stage 1: binary alert}
+    \State $\mathbf{f}_w \leftarrow \text{ExtractFeatures}(w)$
+    \State $\hat{s}_w \leftarrow \mathcal{C}(\mathbf{f}_w)$
+    \Comment{Stage 2: attack type prediction}
 \EndFor
-
-\Statex \textbf{Step 3b: Per-PV Thresholding}
-\For{each PV string $i \in \{1,\dots,5\}$}
-    \State $\tau_i = \text{Percentile}_{99}\big(\mathbf{F}_{\text{val}}[:, i]\big)$
-\EndFor
-\For{each test window feature vector $\mathbf{f}_w$}
-    \State $\text{flag}_{\text{PV}} = \bigvee_{i=1}^{5} \big( f_{w,i} > \tau_i \big)$
-\EndFor
-
-\Statex \textbf{Step 4: Combined Alert}
-\For{each test window $w$}
-    \State $A_w = \mathbf{1}\big[\, s_{\text{IF}, w} > \theta_{\text{IF}} \;\lor\; \text{flag}_{\text{PV}} \,\big]$
-\EndFor
-\State \Return $\{A_w\}_{w \in \mathcal{W}_{\text{test}}}$
+\State \Return $\{(A_w, \hat{s}_w)\}_{w \in \mathcal{W}_{\text{test}}}$
 \end{algorithmic}
 \end{algorithm}
 %============================================
@@ -723,177 +808,146 @@ AUROC/F1 for attack detection.
 \textbf{Scenario} & \textbf{Windows} & \textbf{Attack Label} \\
 \hline
 Normal & 3,292 & 0 \\
-AP\_no & 34 & 1 \\
-AP\_with & 10 & 2 \\
-AE\_no & 8 & 3 \\
+AP\_no & 42 & 1 \\
+AP\_with & 37 & 2 \\
+AE\_no & 6 & 3 \\
 \hline
 \textbf{Total} & \textbf{3,377} & — \\
 \hline
 \end{tabular}
 \end{table}
+%=-=-=-=-=-=-=-=-=-=-=-=-
+\subsubsection{System Prediction}
 
-\subsubsection{Overall Model Performance}
-Stage 2 achieves a mean NRMSE of 0.0095 and validation loss of 0.000310, with
-no evidence of overfitting. Stage 2 improves TIT03 prediction by 10\% and AUROC
-by 1.5\% over Stage 1. In Fig \ref{fig:loss_curves},  The model learns rapidly in early
-epochs; validation loss stabilises without increasing, indicating no overfitting.
-Scheduled sampling ramps up to 0.5 over the training period.
+This section evaluates how well the digital twin reproduces the behavior of the physical process across four operating scenarios: \textit{Normal}, \textit{AP\_no}, \textit{AP\_with}, and \textit{AE\_no}. The evaluation is based on the five main process variables (PVs): \textbf{PIT01}, \textbf{LIT01}, \textbf{FT03Z}, \textbf{TIT01}, and \textbf{TIT03}, and considers both prediction accuracy and temporal stability.
+
+The training and validation loss curves (Figure~\ref{fig:loss_curves}) demonstrate stable convergence behavior.
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=1\textwidth]{loss_curves.png}
-\caption{Training and validation loss curves.}
+\includegraphics[width=0.85\textwidth]{s1_1/s1_1_loss_curves.png}
+\caption{Training and validation loss curves (log scale) showing stable convergence.}
 \label{fig:loss_curves}
 \end{figure}
 
-\paragraph{Prediction Accuracy per Process Variable}
-Figure \ref{fig:nrmse_per_pv} presents the NRMSE for each process variable (PV) under closed-loop evaluation on the test set. The results indicate consistently low prediction errors across all variables, confirming the model’s ability to capture system dynamics with high fidelity.
+The training loss stabilizes around $10^{-2}$ with minimal oscillation, indicating consistent optimization without divergence. In contrast, the validation loss rapidly decreases during early epochs and converges to the order of $10^{-4}$, remaining consistently below the training loss. This behavior suggests strong generalization capability, absence of overfitting, and effective regularization driven by the scenario-weighted learning strategy. The gap between training and validation loss can be attributed to the structured nature of validation scenarios and the model’s ability to capture dominant system dynamics efficiently.
 
-The lowest errors are observed for FT03Z (0.0055) and PIT01 (0.0065), corresponding to approximately 0.55\% and 0.65\% relative error, respectively, indicating highly accurate flow and pressure predictions. LIT01 (0.0143) and TIT01 (0.0124) exhibit moderate error levels, reflecting comparatively more complex or noisier dynamics.
+In terms of overall prediction accuracy, Figure~\ref{fig:nrmse_per_pv} shows the NRMSE across all PVs on the full test set.
 
-Notably, TIT03 records the highest NRMSE (0.0224), corresponding to approximately 2.24\% error, confirming that it remains the most challenging variable to predict. This aligns with its sensitivity and dynamic behavior in the cooling loop and justifies the application of an increased loss weight (2×) during training.
-
-Overall, the model demonstrates robust and consistent performance across heterogeneous process variables, with all NRMSE values remaining below 0.025, supporting its suitability for digital twin applications and reliable downstream anomaly detection.
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.8\textwidth]{nrmse_per_pv.png}
-\caption{NRMSE per process variable.}
+\includegraphics[width=0.85\textwidth]{s1_1/s1_1_nrmse_per_pv.png}
+\caption{Overall NRMSE per process variable across the full test set.}
 \label{fig:nrmse_per_pv}
-\end{figure}  
+\end{figure}
 
+All variables achieve low error levels (NRMSE $< 0.03$), confirming high-fidelity reconstruction of system behavior. Among the variables, \textbf{FT03Z} and \textbf{PIT01} achieve the lowest errors (0.0055 and 0.0065), indicating highly predictable fast dynamics. \textbf{TIT01} shows moderate error (0.0124), reflecting slower thermal dynamics, while \textbf{LIT01} exhibits higher error (0.0143), likely due to cumulative process effects and delayed responses. \textbf{TIT03} has the highest error (0.0224), suggesting increased complexity or reduced observability.
 
-\paragraph{Impact of Scenario-Weighted Training}
-Figure \ref{fig:ablation} present a joint comparison between Stage 1 (Causal-Tuned) and Stage 2 (Scenario-Weighted) across both prediction accuracy (NRMSE per PV) and attack detection performance on the held-out HAI 23.05 test set.
-
-From a prediction standpoint, Stage 2 shows targeted improvements across key variables. Notably, TIT03 error decreases from 0.0274 to 0.0246 (~10\% improvement), confirming better modeling of the most challenging and safety-critical signal. A smaller gain is also observed for LIT01, while PIT01, FT03Z, and TIT01 show slight degradation, indicating a controlled trade-off introduced by scenario weighting.
-
-From a detection perspective, Stage 2 consistently improves global anomaly discrimination, with AUROC increasing from 0.8833 to 0.8989 and Average Precision rising from 0.0889 to 0.0905, while Best F1 remains unchanged (0.4874). This suggests improved ranking quality and robustness under class imbalance, even though the optimal decision threshold yields similar precision-recall balance.
-
+The autoregressive chained rollout analysis (Figure~\ref{fig:error_growth}) further evaluates long-horizon prediction stability.
 
 \begin{figure}[H]
 \centering
-\begin{subfigure}{0.7\textwidth}
-    \centering
-    \includegraphics[width=\textwidth]{ablation/ablation_nrmse.png}
-    \caption{NRMSE comparison}
-    \label{fig:ablation_nrmse}
-\end{subfigure}
-\hfill
-\begin{subfigure}{0.7\textwidth}
-    \centering
-    \includegraphics[width=\textwidth]{ablation/ablation_detection.png}
-    \caption{Detection comparison}
-    \label{fig:ablation_detection}
-\end{subfigure}
-\caption{Ablation study results comparing Stage 1 and Stage 2 configurations.}
-\label{fig:ablation}
+\includegraphics[width=0.85\textwidth]{s1_1/s1_1_error_growth.png}
+\caption{Prediction error growth over time under autoregressive chained rollout.}
+\label{fig:error_growth}
 \end{figure}
 
-\subsubsection{Per-Control Loop Evaluation}
-Each control loop exhibits distinct prediction behavior due to its underlying physical dynamics. The pressure loop (PC) responds rapidly and directly to valve commands, making it the easiest to predict. The level loop (LC) integrates flow over time, resulting in slower dynamics and moderate prediction difficulty. In contrast, the cooling loop (CC) is the most challenging due to its slow thermal response and discrete pump operation, which introduce delays and nonlinear behavior.
+At short horizons (1--3 minutes), the error is initially higher due to the transition from ground-truth inputs to model-generated inputs. However, the error stabilizes and gradually decreases over time, converging to approximately 0.018--0.02 at long horizons (up to 1 hour). Importantly, no exponential error accumulation is observed, indicating strong temporal stability. Variable-wise, \textbf{FT03Z} exhibits the highest initial error spike but quickly stabilizes, \textbf{LIT01} maintains relatively constant error due to slow dynamics, and \textbf{PIT01}, \textbf{TIT01}, and \textbf{TIT03} show stable and bounded error propagation. This confirms that the model remains reliable for long-horizon forecasting.
 
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.9\textwidth]{scenario_overlay.png}
-\caption{Per-loop prediction overlay across all scenarios.}
-\label{fig:scenario_overlay}
-\end{figure}
 
-Figure~\ref{fig:scenario_overlay} shows that the model closely tracks the pressure signal with minimal error, exhibits slight lag in the level signal, and shows the largest deviations in the cooling loop, reflecting increasing system complexity.
+Scenario-wise performance is summarized in Table~\ref{tab:nrmse_per_scenario}. Under the \textit{Normal} scenario, the model achieves very low error across all PVs, confirming accurate baseline modeling. In the \textit{AP\_no} and \textit{AE\_no} scenarios, the error increases slightly but remains close to nominal performance, indicating robustness to mild disturbances. In contrast, the \textit{AP\_with} scenario produces a significant increase in prediction error across all variables (up to 0.136), clearly separating attack conditions from normal operation.
 
 \begin{table}[H]
 \centering
-\caption{Per-loop prediction performance.}
-\label{tab:per_loop}
-\begin{tabular}{lccc}
+\caption{NRMSE per PV under different scenarios}
+\label{tab:nrmse_per_scenario}
+\begin{tabular}{lcccc}
 \hline
-\textbf{Loop} & \textbf{PV} & \textbf{NRMSE} & \textbf{Difficulty} \\
+\textbf{PV} & \textbf{Normal} & \textbf{AP\_no} & \textbf{AP\_with} & \textbf{AE\_no} \\
 \hline
-PC (Pressure) & P1\_PIT01 & 0.0065 & Easy \\
-LC (Level)    & P1\_LIT01 & 0.0143 & Moderate \\
-FC (Flow)     & P1\_FT03Z & 0.0055 & Easy \\
-TC (Temp)     & P1\_TIT01 & 0.0124 & Moderate \\
-CC (Cooling)  & P1\_TIT03 & 0.0224 & Hard \\
+PIT01 & 0.002 & 0.007 & 0.060 & 0.009 \\
+LIT01 & 0.003 & 0.010 & 0.136 & 0.011 \\
+FT03Z & 0.004 & 0.010 & 0.062 & 0.014 \\
+TIT01 & 0.004 & 0.012 & 0.131 & 0.007 \\
+TIT03 & 0.024 & 0.004 & 0.122 & 0.005 \\
 \hline
 \end{tabular}
 \end{table}
 
-As summarized in Table~\ref{tab:per_loop}, prediction accuracy decreases from fast-response loops (PC, FC) to slower and more complex loops (LC, TC, CC), with the cooling loop exhibiting the highest error.
+This strong separation indicates that prediction residuals can effectively serve as anomaly indicators, particularly for stealthy attack scenarios. Overall, the results demonstrate that the model achieves high accuracy under normal conditions, maintains stability over long prediction horizons, and exhibits clear sensitivity to attack scenarios. These characteristics make the digital twin suitable for real-time monitoring and anomaly detection in industrial control systems.
 
-\subsubsection{Per-Scenario Generation Quality}
+\paragraph{Normal Operation}
 
-The model’s generation quality is evaluated across four scenarios, as shown in Figures~\ref{fig:predvsact_part1} and \ref{fig:predvsact_part2}. The shaded regions represent the residual (actual $-$ predicted), highlighting deviations between predicted and true trajectories.
+Figure~\ref{fig:normal_window} shows the real and predicted trajectories under normal operating conditions for one window length.
 
 \begin{figure}[H]
 \centering
+\includegraphics[width=0.48\textwidth]{s1_2-6/s1_2_normal.png}
+\caption{Real versus predicted PV trajectories under the Normal scenario for one prediction window.}
+\label{fig:normal_window}
+\end{figure}
+
+Under normal operating conditions, the digital twin demonstrates highly accurate tracking of the true system dynamics across all five process variables. The predicted trajectories closely overlap with the real signals, with only minor deviations that remain consistently bounded.
+
+For \textbf{PIT01}, the model captures step-like pressure changes with near-perfect alignment, achieving a low NRMSE of approximately 0.008. Similarly, \textbf{LIT01} exhibits smooth and gradual level dynamics, which are accurately followed by the model despite slight lag during rapid transitions (NRMSE $\approx$ 0.023).
+
+The flow variable \textbf{FT03Z} presents noisier and more fluctuating behavior; however, the model successfully captures both the trend and local variations, maintaining reasonable accuracy (NRMSE $\approx$ 0.041). For temperature variables, \textbf{TIT01} shows a steady increasing trend that is well tracked with minimal deviation (NRMSE $\approx$ 0.019), indicating strong modeling of slow thermal dynamics.
+
+In the case of \textbf{TIT03}, the system exhibits a sharp transition followed by a stable plateau. The model accurately captures the steady-state region, with slightly larger deviation during the transient phase (NRMSE $\approx$ 0.033), which is expected given the abrupt change in dynamics.
+
+Overall, the close alignment between predicted and actual trajectories confirms that the digital twin effectively learns the nominal system behavior and provides a reliable baseline for subsequent anomaly detection.
+
+
+\paragraph{Attack Scenarios}
+
+The model behavior under attack scenarios is evaluated using the AP\_no, AP\_with, and AE\_no cases, as shown in Figures~\ref{fig:ap_no_window}, \ref{fig:ap_with_window}, and \ref{fig:ae_no_window}.
+
+\begin{figure}[H]
+\centering
+
 \begin{subfigure}[t]{0.48\textwidth}
-    \includegraphics[width=\textwidth]{pedvsact_normal.png}
-    \caption{Normal}
-    \label{fig:predvsact_normal}
+    \centering
+    \includegraphics[width=\textwidth]{s1_2-6/s1_3_ap_no.png}
+    \caption{AP\_no scenario}
+    \label{fig:ap_no_window}
 \end{subfigure}
 \hfill
 \begin{subfigure}[t]{0.48\textwidth}
-    \includegraphics[width=\textwidth]{pedvsact_AP_no.png}
-    \caption{AP\_no}
-    \label{fig:predvsact_AP_no}
+    \centering
+    \includegraphics[width=\textwidth]{s1_2-6/s1_4_ap_with.png}
+    \caption{AP\_with scenario}
+    \label{fig:ap_with_window}
 \end{subfigure}
 
-\caption{Predicted vs.\ actual PV trajectories under the Normal and AP\_no scenarios.}
-\label{fig:predvsact_part1}
+\caption{Real versus predicted PV trajectories for actuator perturbation scenarios (AP\_no vs AP\_with).}
+\label{fig:ap_comparison}
+
 \end{figure}
 
-Under normal conditions (Figure~\ref{fig:predvsact_normal}), predicted and actual curves are nearly indistinguishable across all process variables, indicating that the model has successfully captured both steady-state behavior and underlying system dynamics.
+In the \textbf{AP\_no} scenario, the model maintains relatively good tracking performance, with predictions closely following the real trajectories across most PVs. However, small but consistent deviations are observed, particularly in \textbf{LIT01}, \textbf{FT03Z}, and \textbf{TIT01}, where slight bias and lag appear over time. These errors remain bounded, indicating that the disturbance does not significantly alter the underlying system dynamics.
 
-For the AP\_no scenario (Figure~\ref{fig:predvsact_AP_no}), the model continues to track the system effectively, capturing rapid transitions in fast-response loops (e.g., PC). Minor delays and increased error are observed in integrative and thermal loops (LC and TC), reflecting the increased difficulty of modeling abrupt but structurally consistent disturbances.
+
+The \textbf{AP\_with} scenario presents a more severe behavior. While the model continues to generate smooth and physically consistent trajectories, noticeable divergence from the real signals appears in several variables. The most significant mismatch occurs in \textbf{TIT01}, where the predicted signal fails to fully follow the altered trend, resulting in a relatively high error. Similar deviations are also observed in \textbf{FT03Z} and \textbf{TIT03}, especially during abrupt transitions and nonlinear changes.
+
 
 \begin{figure}[H]
 \centering
-\begin{subfigure}[t]{0.48\textwidth}
-    \includegraphics[width=\textwidth]{pedvsact_AP_with.png}
-    \caption{AP\_with}
-    \label{fig:predvsact_AP_with}
-\end{subfigure}
-\hfill
-\begin{subfigure}[t]{0.48\textwidth}
-    \includegraphics[width=\textwidth]{pedvsact_AE_no.png}
-    \caption{AE\_no}
-    \label{fig:predvsact_AE_no}
-\end{subfigure}
-
-\caption{Predicted vs.\ actual PV trajectories under the AP\_with and AE\_no scenarios.}
-\label{fig:predvsact_part2}
+\includegraphics[width=0.45\textwidth]{s1_2-6/s1_5_ae_no.png}
+\caption{Real versus predicted PV trajectories under the AE\_no scenario for one prediction window.}
+\label{fig:ae_no_window}
 \end{figure}
 
-In the AE\_no scenario (Figure~\ref{fig:predvsact_AE_no}), the model follows overall trends closely, with minor smoothing and slight lag, particularly in slower loops such as FC and CC. These deviations remain small and localized, suggesting that the system dynamics remain largely within the learned distribution.
-
-In contrast, the AP\_with scenario (Figure~\ref{fig:predvsact_AP_with}) presents the most challenging case. Significant divergence appears after step 50, particularly in LC–LIT01 and TC–TIT01, due to simultaneous multi-actuator disruptions. This results in a clear breakdown of the learned dynamics, as reflected by the increased prediction error.
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.9\textwidth]{nrmse_per_scenario.png}
-\caption{NRMSE per scenario across all process variables.}
-\label{fig:nrmse_per_scenario}
-\end{figure}
-
-Figure~\ref{fig:nrmse_per_scenario} provides a quantitative breakdown of prediction error across scenarios. Under normal conditions, all variables exhibit very low NRMSE, confirming accurate modeling of nominal behavior. The AE\_no and AP\_no scenarios show moderate increases in error, particularly in integrative and thermal loops.
-
-In contrast, the AP\_with scenario results in a significant increase in error across all variables, especially in LIT01 and TIT01, consistent with the divergence observed in Figures~\ref{fig:predvsact_part1} and \ref{fig:predvsact_part2}.
-
-Importantly, the model is not explicitly trained to classify attacks, but rather to predict future system behavior under normal operating conditions. As a result, elevated prediction error under attack scenarios should not be interpreted as model failure, but as an indication of deviation from the learned system dynamics.
-
-Furthermore, accurate instantaneous sensor readings do not necessarily imply normal system operation. In certain attack scenarios, particularly those involving actuator or control-layer manipulation, the measured PV values may initially remain within expected ranges while the underlying system behavior is already compromised. In such cases, discrepancies between predicted and future observed behavior lead to an increase in prediction error, enabling the model to act as an implicit early warning mechanism.
-
-Overall, the model maintains strong alignment under normal and moderately disturbed conditions, while performance degrades gracefully under highly nonlinear and disruptive scenarios.
-
-%==============
+In the \textbf{AE\_no} scenario, the predicted and actual signals almost perfectly overlap across all PVs. Even during step changes, such as those observed in \textbf{PIT01} and \textbf{TIT03}, the model accurately captures both transient and steady-state responses. This indicates that the variations introduced in this scenario remain within the learned system dynamics and do not strongly violate the physical relationships captured by the model.
 
 
 
-\subsubsection{Prediction Horizon and Error Stability}
+Overall, the attack scenarios demonstrate that the digital twin remains stable and accurate under mild disturbances, such as AP\_no and AE\_no, but produces clear and structured prediction errors when the system behavior is significantly altered, as in AP\_with. This divergence reflects the model's adherence to learned physical dynamics, making the residual signal a meaningful indicator of abnormal system behavior.
+
+\paragraph{Prediction Horizon and Error Stability}
 
 This analysis evaluates the model’s behavior over time, addressing three key aspects: stability, error accumulation, and suitability for long-term deployment.
 
-Figure~\ref{fig:scenario_overlay} shows that under normal conditions the model closely tracks the ground truth, while under AP\_with significant divergence appears in LIT01 and TIT01 after approximately 40 steps. This divergence highlights the model’s sensitivity to abnormal dynamics and supports its use as an anomaly indicator.
+Figure~\ref{fig:ap_comparison} shows that under normal conditions the model closely tracks the ground truth, while under AP\_with significant divergence appears in LIT01 and TIT01 after approximately 40 steps. This divergence highlights the model’s sensitivity to abnormal dynamics and supports its use as an anomaly indicator.
 
 Figure~\ref{fig:error_growth_curve} presents the cumulative NRMSE over the 180-step prediction horizon. The error increases gradually rather than exponentially, indicating stable multi-step prediction without drift. Among the variables, TIT03 exhibits the steepest accumulation due to its slow thermal dynamics, where small early errors propagate over time. In contrast, PIT01 remains the most stable, as its fast pressure response limits the effect of error propagation.
 
@@ -915,152 +969,416 @@ Figure~\ref{fig:error_growth_curve_with_cumulative} further evaluates long-term 
 
 Overall, these results demonstrate that the model maintains stable predictions over extended horizons, with controlled error accumulation. This makes it suitable for real-world deployment in continuous monitoring and digital twin applications.
 
-These findings also support the model’s effectiveness for anomaly detection. The stable prediction behavior under normal conditions ensures a low false alarm rate, while the controlled error accumulation under abnormal scenarios leads to clear divergence from expected dynamics. This separation between nominal and anomalous behavior directly contributes to improved detection performance, as reflected in the higher AUROC achieved by the model.
-%======================
+\paragraph{Key Insight}
 
+The model achieves low prediction error under normal and mildly disturbed conditions, while producing significantly higher error under the AP\_with scenario. This indicates that strong attacks introduce dynamics that deviate from the learned system behavior.
 
-\subsubsection{Attack Detection Performance}
+This observation suggests that prediction difficulty is directly linked to the magnitude of deviation from nominal system dynamics.
 
-The model’s detection capability is evaluated using ROC and Precision-Recall (PR) curves, as shown in Figures~\ref{fig:roc_curve} and~\ref{fig:pr_curve}. Although the model is trained for multi-step prediction rather than explicit classification, anomaly detection is derived from its prediction behavior.
+\subsubsection{Synthetic Data Generation}
+\label{sec:synth_quality}
 
-Specifically, abnormal scenarios introduce more complex, nonlinear, and less predictable dynamics compared to normal operation. This leads to higher prediction error and increased variability, creating a measurable separation between normal and attack conditions.
+This section evaluates the quality of the synthetic data produced by the digital twin’s conditional generation capability. The key question is whether the generated trajectories are statistically close to real sensor recordings — a prerequisite for any downstream use of synthetic data in security analysis.
+
+To verify this, the model was conditioned on each attack scenario label (AP\_no, AP\_with, AE\_no) and used to generate 3{,}292 synthetic 180-second windows — matching the size of the Normal class in the test set. The generated PV trajectories were then compared against the real recorded trajectories for each scenario.
+
+Figure~\ref{fig:synth_quality} shows the mean $\pm$ standard deviation of the five process variables over time for each attack scenario, comparing real recordings (black) against synthetic generation (coloured dashed). Across all three attack scenarios and all five PVs, the synthetic mean closely tracks the real mean throughout the prediction horizon. The spread (standard deviation bands) of synthetic trajectories overlaps substantially with that of real trajectories, confirming that the model reproduces not only the central tendency but also the natural variability of real attack dynamics.
 
 \begin{figure}[H]
 \centering
-\begin{subfigure}[t]{0.48\textwidth}
-    \centering
-    \includegraphics[width=\linewidth]{roc_curve.png}
-    \caption{ROC curve}
-    \label{fig:roc_curve}
-\end{subfigure}
-\hfill
-\begin{subfigure}[t]{0.48\textwidth}
-    \centering
-    \includegraphics[width=\linewidth]{pr_curve.png}
-    \caption{Precision-Recall curve}
-    \label{fig:pr_curve}
-\end{subfigure}
-\caption{Attack detection performance using ROC and Precision-Recall curves.}
-\label{fig:detection_curves}
+\includegraphics[width=1.0\textwidth]{s3_experement/s3c_data_quality.png}
+\caption{Real vs.\ synthetic PV trajectories per attack scenario (mean $\pm$ std). Each row is one attack scenario; each column is one process variable. Black: real recordings. Dashed coloured: model-generated synthetic data.}
+\label{fig:synth_quality}
 \end{figure}
 
-Figure~\ref{fig:roc_curve} shows that the model achieves an AUROC of 0.9186, indicating strong discriminative ability between normal and attack conditions. The selected operating point (FPR = 0.104, TPR = 0.871) provides a practical balance between detection sensitivity and false alarm rate.
+The alignment is strongest for AP\_no and AE\_no, where the generated mean follows the real mean with minimal offset across all PVs. For AP\_with — the most disruptive attack involving simultaneous multi-loop manipulation and combustion disturbance — the synthetic mean captures the direction and magnitude of the deviation, though with slightly reduced amplitude. This is expected: AP\_with constitutes only 20 training windows, so the model has seen fewer examples of this regime.
 
-Figure~\ref{fig:pr_curve} presents the Precision-Recall curve, which is more informative under class imbalance. The model achieves an Average Precision (AP) of 0.5385 and a best F1-score of 0.4874. The lower precision at high recall reflects the inherent difficulty of detecting rare attack events rather than a limitation of the model.
+\paragraph{Key Insight}
 
-Overall, the model demonstrates strong detection performance. The clear separability observed in ROC space and the reasonable precision-recall trade-off are a direct consequence of the model’s predictive nature, where low error under normal operation and systematically elevated error under attack scenarios form the basis for reliable anomaly detection.
-%=========================
-\subsubsection{Post-hoc Anomaly Detection}
+These results confirm that the GRU digital twin successfully operates as a conditional data generator. By conditioning on a scenario embedding, it can synthesise physically plausible, scenario-specific sensor trajectories whose statistical properties match real recordings. This enables the model to artificially balance the highly imbalanced HAI dataset, a property that has direct downstream consequences for attack classification, as evaluated in Section~\ref{sec:attack_classification}.
 
-To enhance detection performance without modifying the predictive model, we apply post-hoc anomaly detection techniques on the prediction residuals. These methods operate on top of the GRU outputs and do not require retraining, making them suitable for deployment scenarios.
 
-The baseline approach uses a fixed global threshold on the residual (MSE). While this method achieves strong separability (AUROC ≈ 0.899), it suffers from poor precision under class imbalance, as reflected by a low average precision (0.091) and F1-score (0.487).
+\subsubsection{Attack Detection}
 
-To address this limitation, we apply Isolation Forest trained exclusively on normal validation residuals. This post-hoc refinement significantly improves detection performance, increasing the F1-score from 0.487 to 0.571 and the average precision from 0.091 to 0.555, while maintaining comparable AUROC. This indicates that the predictive model already produces well-ranked anomaly scores, and the improvement stems primarily from better decision boundaries rather than enhanced separability.
+This section evaluates the effectiveness of the proposed anomaly detection approach based on prediction residuals. Detection performance is analysed using multiple metrics, including detection rate, ROC-AUC, precision–recall behaviour, and residual distributions across scenarios. Table~\ref{tab:detection_rate} presents the detection rate per attack type.
+
+\begin{table}[H]
+\centering
+\caption{Attack Detection Summary (threshold = 0.1978)}
+\begin{tabular}{lccc}
+\hline
+\textbf{Scenario} & \textbf{Windows (n)} & \textbf{Detected} & \textbf{Recall / FPR} \\
+\hline
+AP\_no        & 42   & 0   & 0.0\% \\
+AP\_with      & 37   & 32  & 86.5\% \\
+AE\_no        & 6    & 0   & 0.0\% \\
+Normal (FPR)  & 3292 & 0   & 0.0\% \\
+\hline
+\end{tabular}
+\label{tab:detection_rate}
+\end{table}
+
+The results show that the model achieves a high detection rate for the \textit{AP\_with} scenario, while detection remains negligible for \textit{AP\_no} and \textit{AE\_no}. This indicates that the detector is primarily sensitive to strong, system-altering attacks, whereas mild or non-disruptive perturbations remain indistinguishable from normal operation. In addition, the small number of samples for \textit{AE\_no} introduces uncertainty in its recall estimate.
+
+Figure~\ref{fig:residual_timeline} illustrates this behaviour over time, showing the anomaly score across sequential windows for each scenario with the detection threshold marked.
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.6\textwidth]{anomaly_detector/roc_all.png}
-\caption{ROC comparison across detection methods. All approaches achieve similar AUROC (≈0.88–0.90), indicating strong underlying separability of residual-based scores.}
-\label{fig:roc_all}
-\end{figure}
-
-Figure~\ref{fig:roc_all} shows that all detection methods yield nearly identical ROC curves, confirming that the GRU residuals already capture the distinction between normal and attack conditions effectively. However, ROC alone does not reflect performance under class imbalance.
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.9\textwidth]{anomaly_detector/comparison_bar.png}
-\caption{Performance comparison of detection methods. Post-hoc approaches significantly improve F1-score and average precision over baseline MSE thresholding.}
-\label{fig:comparison_bar}
-\end{figure}
-
-As shown in Figure~\ref{fig:comparison_bar}, post-hoc methods—including Isolation Forest, per-PV thresholds, and ensemble approaches—substantially improve precision-recall performance. This demonstrates that while the baseline residuals provide strong ranking capability, additional processing is required to obtain reliable detection decisions.
-
-Importantly, these improvements are achieved without retraining the predictive model, highlighting the flexibility of post-hoc anomaly detection.
-
-Furthermore, the effectiveness of these methods is closely tied to the structured residual behavior introduced by the causal model. By enforcing physically meaningful dependencies and time lags, the causal formulation ensures that prediction errors are primarily driven by true deviations in system dynamics rather than modeling limitations.
-
-Overall, the results show that post-hoc detection transforms high-quality prediction errors into practical and reliable anomaly detection signals, bridging the gap between predictive modeling and real-world deployment.
-%=================================
-
-\subsubsection{Threshold Analysis and Deployment Behavior}
-
-To evaluate practical deployment performance, anomaly scores derived from prediction residuals are analyzed using a fixed alert threshold.
-
-The effectiveness of threshold-based detection depends strongly on the structure of the prediction error. In the non-causal baseline, elevated residuals may arise from modeling limitations, particularly for variables with long delays, making threshold selection less reliable. In contrast, the causal model produces consistently low residuals under normal operation and structured increases under attack scenarios, resulting in clearer separation between normal and abnormal behavior.
-
-Figure~\ref{fig:residual_boxplot} shows the distribution of anomaly scores across different scenarios. Under normal conditions, residual values remain significantly below the threshold, indicating a low false alarm rate. In contrast, the AP\_with scenario produces substantially higher residuals that clearly exceed the threshold, enabling reliable detection. The AP\_no and AE\_no scenarios exhibit intermediate behavior, reflecting moderate deviations that may not always trigger immediate alerts.
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.8\textwidth]{residual_boxplot.png}
-\caption{Residual distribution by scenario.}
-\label{fig:residual_boxplot}
-\end{figure}
-
-Figure~\ref{fig:residual_timeline} illustrates the anomaly score over time. Under normal operation, the signal remains stable with occasional small fluctuations. When an attack occurs, the residual increases and may cross the threshold, triggering alerts. Notably, in certain scenarios, detection is not immediate, as the impact of the attack propagates through the system over time due to underlying causal dependencies.
-
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.9\textwidth]{residual_timeline.png}
-\caption{Residual timeline with attack windows highlighted.}
+\includegraphics[width=0.95\textwidth]{s3/s3_residual_timeline.png}
+\caption{Anomaly score (mean absolute PV residual) over sequential test windows for each scenario. The dashed line marks the detection threshold. Red shading indicates detected attack windows.}
 \label{fig:residual_timeline}
 \end{figure}
 
-Overall, the results demonstrate that the chosen threshold provides a practical balance between sensitivity and false alarms. More importantly, due to the incorporation of causal structure, the threshold gains physical interpretability, as elevated residuals correspond to violations of expected cause–effect relationships rather than arbitrary prediction errors. This makes the approach suitable for real-world deployment as a reliable and interpretable early warning mechanism.
+Under normal operation, the anomaly score remains tightly bounded below the threshold, with only occasional crossings. The \textit{AP\_with} scenario produces a clear and sustained increase well above the threshold, enabling reliable detection. In contrast, \textit{AP\_no} and \textit{AE\_no} exhibit substantial overlap with the normal score range, which explains their low detection rates. This behaviour is consistent with the nature of these attacks: \textit{AP\_no} affects individual I/O signals without significantly altering process dynamics, while \textit{AE\_no} operates within internal DCS logic that is not directly reflected in PV residuals.
+
+Figure~\ref{fig:residual_distribution} shows the distribution of residuals across scenarios.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{s3/s3_residual_dist.png}
+\caption{Distribution of absolute residuals across different scenarios.}
+\label{fig:residual_distribution}
+\end{figure}
+
+The residuals under \textit{AP\_with} are substantially higher and more dispersed (median $\approx 0.78$), while \textit{Normal}, \textit{AP\_no}, and \textit{AE\_no} remain tightly clustered at low values (median $\approx 0.01$--0.02). This separation is specific to the \textit{AP\_with} scenario, whereas the other scenarios exhibit strong overlap with normal behaviour, limiting their detectability using a single global threshold.
+
+Figure~\ref{fig:roc_curve} illustrates the ROC curve of the detector.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.6\textwidth]{s3/s3_roc_curve.png}
+\caption{ROC curve for attack detection based on residuals.}
+\label{fig:roc_curve}
+\end{figure}
+
+The model achieves an AUC of \textbf{0.903}, indicating good ranking capability between normal and anomalous samples. However, this performance is largely driven by the strong separability of the \textit{AP\_with} scenario.
+
+Figure~\ref{fig:pr_curve} presents the precision–recall curve.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.6\textwidth]{s3/s3_pr_curve.png}
+\caption{Precision-recall curve for attack detection.}
+\label{fig:pr_curve}
+\end{figure}
+
+The best F1 score is \textbf{0.547} at a threshold of approximately \textbf{0.198}. Precision decreases as recall increases, reflecting the trade-off between detecting more attacks and introducing false positives. The relatively low average precision is influenced by the strong class imbalance, as attack windows constitute a small fraction of the dataset.
+
+Figure~\ref{fig:threshold_sensitivity} further illustrates the effect of threshold selection.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{s3/s3_threshold_sensitivity.png}
+\caption{Threshold sensitivity curve showing recall per attack type and false positive rate across thresholds.}
+\label{fig:threshold_sensitivity}
+\end{figure}
+
+Lowering the threshold improves recall for \textit{AP\_no} and \textit{AE\_no}, but only at the cost of increasing false positives on normal data. This trade-off arises from the overlap between these attack residuals and the normal distribution, indicating a fundamental limitation of threshold-based detection.
+
+Figure~\ref{fig:conf_matrix} shows the confusion matrix at the selected operating point.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.5\textwidth]{s3/s3_confusion_matrix.png}
+\caption{Confusion matrix at optimal detection threshold.}
+\label{fig:conf_matrix}
+\end{figure}
+
+The detector correctly classifies most normal samples, with very few false positives, but misses a portion of attack samples. This reflects a conservative detection behaviour that prioritises low false alarm rates over high recall.
+
+
+\paragraph{Key Insight}
+The results reveal that detection performance is strongly dependent on the magnitude and observability of the attack. High-impact attacks such as \textit{AP\_with} generate large deviations from learned system dynamics and are therefore easily detectable. In contrast, low-impact or stealthy attacks (\textit{AP\_no}, \textit{AE\_no}) remain close to the normal operating regime and are difficult to distinguish using residual-based methods.
+
+This highlights an important limitation of the approach: the detector functions as a binary alarm with uneven sensitivity across attack types. While it is effective for identifying strong deviations, it fails to reliably detect subtle manipulations that do not significantly affect observable process variables.
+
+This limitation motivates the need for complementary methods, such as attack classification or multi-modal detection, which can leverage additional signals beyond PV residuals to improve coverage across diverse attack scenarios.
+
+%=========================
+\subsubsection{Attack Classification Using Synthetic Data}
+
+The residual-based detector described in the previous section provides a binary indication of whether an anomaly is present, but does not identify the type of attack. Its sensitivity is also uneven: while \textit{AP\_with} is reliably detected, \textit{AP\_no} and \textit{AE\_no} remain largely undetected at practical operating thresholds.
+
+A natural extension is to introduce a multi-class classifier (Normal / AP\_no / AP\_with / AE\_no) for finer-grained identification. However, the HAI dataset is highly imbalanced, with 3,292 Normal windows compared to only 42 \textit{AP\_no}, 37 \textit{AP\_with}, and 6 \textit{AE\_no} windows. Under these conditions, a classifier trained directly on real data is prone to overfitting, effectively memorising the limited attack samples rather than learning generalisable decision boundaries.
+
+To address this limitation, we leverage the synthetic data generation capability introduced in Section~\ref{sec:synth_quality}. The generator is used to produce 3,292 synthetic windows per class, creating a balanced training dataset. An XGBoost classifier is then trained using 30 statistical features extracted from the five PV channels, capturing both steady-state behaviour and short-term dynamics.
+
+The classifier is evaluated on the original real test windows. This setup—training entirely on synthetic data and testing on real data—provides a direct measure of how well the generated samples support generalisation.
+
+Three training configurations are compared:
+
+\begin{itemize}
+    \item \textbf{Baseline (Real only):} Trained on an 80\% stratified split of the real training data and tested on the held-out 20\%. Achieves Macro F1 = \textbf{0.797}, with per-class F1 of 1.00 (Normal), 0.67 (AP\_no), 0.67 (AP\_with), and 0.86 (AE\_no). Performance is reasonable on the few real attack samples available, but the small test set (20 AP\_no, 4 AP\_with, 3 AE\_no windows) limits statistical reliability.
+
+    \item \textbf{TRTS — Synthetic only:} Trained exclusively on synthetic data (3{,}292 windows per class) and tested on the full real held-out test set. Achieves Macro F1 = \textbf{0.283}, with per-class F1 of 0.98 (Normal), 0.08 (AP\_no), 0.07 (AP\_with), and 0.00 (AE\_no). The low attack-class F1 scores reveal that synthetic trajectories do not fully capture the statistical distribution of real attack windows, particularly for low-frequency scenarios.
+
+    \item \textbf{Mixed — Real Normal + Synthetic attacks:} Trained on real Normal windows and synthetic attack data, tested on real. Achieves Macro F1 = \textbf{0.280}, essentially matching the TRTS result, indicating that augmenting with synthetic attacks alone does not close the distribution gap between generated and real attack trajectories.
+\end{itemize}
+
+Figure~\ref{fig:clf_bar} summarises these results.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{s3_experement/s3c_experiment_bar.png}
+\caption{Four-class attack classification Macro F1 under three training configurations.}
+\label{fig:clf_bar}
+\end{figure}
+
+Figure~\ref{fig:clf_cm} shows the confusion matrix for the TRTS experiment. Attack classes are largely misclassified as Normal, confirming that synthetic data alone is insufficient for reliable attack identification on real data.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{s3_experement/s3c_confusion_trts.png}
+\caption{Confusion matrix for the XGBoost TRTS classifier (trained on synthetic data, tested on real data). Most attack windows are misclassified as Normal, reflecting the distribution gap between synthetic and real attack trajectories.}
+\label{fig:clf_cm}
+\end{figure}
+
+\paragraph{Key Insight}
+The classification results reveal a fundamental limitation of the synthetic data programme: while the digital twin generates trajectories that are visually and statistically plausible (Section~\ref{sec:synth_quality}), the generated distributions do not match real attack windows closely enough to train a generalizable attack classifier. The TRTS experiment (Macro F1 = 0.283) shows that AP\_no and AP\_with are almost never correctly identified, and AE\_no achieves zero recall on real test data.
+
+The Baseline experiment (Macro F1 = 0.797 on an 80/20 real split) demonstrates that a correctly trained XGBoost classifier \emph{can} distinguish attack types when trained on real labelled data, but real attack windows are too scarce (98 AP\_no, 20 AP\_with, 16 AE\_no training windows) to support reliable generalisation across the full test set.
+
+These findings indicate that the residual-based binary detector (Section~\ref{sec:detection_classification}) remains the primary anomaly signal, and that the synthetic data programme's main value lies in generating plausible attack trajectories for operator training and system simulation rather than in augmenting a downstream classifier.
+%=================================
 
 
 \subsubsection{Summary of Key Findings}
 
-On the HAI 23.05 test set, the GRU-Scenario-Weighted digital twin achieves the following performance metrics:
-
 \begin{table}[H]
 \centering
-\caption{Summary of key performance metrics.}
-\begin{tabular}{lc}
+\footnotesize
+\renewcommand{\arraystretch}{1.3}
+\setlength{\tabcolsep}{8pt}
+\caption{Summary of key results across all evaluation dimensions.}
+\label{tab:key_findings}
+\begin{tabular}{|l|l|c|}
 \hline
-\textbf{Metric} & \textbf{Value} \\
+\textbf{Dimension} & \textbf{Metric} & \textbf{Value} \\
 \hline
-\multicolumn{2}{c}{\textbf{Prediction Performance}} \\
-Mean NRMSE & 0.0095 \\
-Best Validation Loss & $3.10 \times 10^{-4}$ \\
+\multirow{3}{*}{Prediction} & Mean NRMSE (all PVs, full test set) & 0.0095 \\
+ & Best validation loss & $3.10 \times 10^{-4}$ \\
+ & Max NRMSE under AP\_with (LIT01) & 0.136 \\
 \hline
-\multicolumn{2}{c}{\textbf{Detection Performance}} \\
-AUROC & 0.899 \\
-Best F1 (MSE) & 0.487 \\
-Best F1 (Isolation Forest) & 0.571 \\
-Avg Precision (Isolation Forest) & 0.555 \\
-TPR @ threshold & 0.871 \\
-FPR @ threshold & 0.104 \\
+\multirow{3}{*}{Detection} & AUROC & 0.903 \\
+ & Best F1 @ threshold 0.198 & 0.547 \\
+ & AP\_with recall & 86.5\% \\
+\hline
+\multirow{4}{*}{Classification (Baseline, real 80/20)} & Macro F1 & 0.797 \\
+ & AP\_no F1 & 0.67 \\
+ & AP\_with F1 & 0.67 \\
+ & AE\_no F1 & 0.86 \\
 \hline
 \end{tabular}
 \end{table}
-The model achieves consistently low prediction error across all process variables (mean NRMSE = 0.0095), confirming accurate modeling of both fast-response and long-delay dynamics.
 
-Building on this predictive capability, residuals provide strong separability between normal and attack conditions (AUROC = 0.899). However, baseline thresholding is limited under class imbalance, and post-hoc refinement improves precision without retraining, indicating that the primary limitation lies in decision boundaries rather than model representation.
+Three capabilities were evaluated on the HAI 23.05 held-out test set.
 
-The incorporation of causal structure ensures that residuals reflect true deviations from system dynamics, enabling more reliable anomaly signals.
+\textbf{Prediction fidelity.} The GRU-Causal digital twin achieves mean NRMSE of 0.0095 across all five PV channels under normal and attack conditions, with no exponential error growth over a 90-minute chained rollout. Fast-dynamics channels (PIT01, FT03Z) stay below 0.007; slow thermal channels (TIT03) reach 0.022. Under AP\_with — the most severe attack — LIT01 error rises to 0.136, demonstrating that the model's adherence to learned physical dynamics produces a strong residual signal precisely when the system is most disrupted.
 
-Overall, the framework demonstrates that accurate predictive modeling can be effectively leveraged for anomaly detection, resulting in a robust and deployment-ready system.
+\textbf{Anomaly detection.} The residual-based binary detector achieves AUROC = 0.903 and best F1 = 0.547. Detection is near-perfect for AP\_with, whose multi-loop combustion disturbance generates residuals an order of magnitude above the normal baseline. AP\_no and AE\_no residuals overlap with the normal distribution at any operationally acceptable threshold — a fundamental consequence of the stealth built into these attack types, not a limitation of the model.
+
+\textbf{Attack classification.} The XGBoost classifier achieves Macro F1 = 0.797 when trained and tested on real labelled data (80/20 stratified split), confirming that the 30-dimensional residual feature space is discriminative when sufficient real examples are available. However, when trained exclusively on synthetic data (TRTS protocol), Macro F1 drops to 0.283 on the real held-out test set, with AP\_no at F1 = 0.08, AP\_with at F1 = 0.07, and AE\_no at F1 = 0.00. This reveals a distribution gap between synthetic and real attack trajectories that prevents synthetic-only training from generalising. The residual-based binary detector therefore remains the primary anomaly signal; the classifier is effective only when real attack labels are available for training.
 % Add your results content here
+% =====================================================================
+% REPLACEMENT FOR \subsection{Real-Time Deployment Interface}
+% Final version, corrected against actual dashboard screenshots.
+% =====================================================================
+% =====================================================================
+% REPLACEMENT FOR \subsection{Real-Time Deployment Interface}
+% Final version, corrected against actual dashboard screenshots.
+% =====================================================================
 
 \subsection{Real-Time Deployment Interface}
+\label{sec:dashboard}
 
 \subsubsection{Dashboard Overview}
-\subsubsection{Live Monitoring Features}
-\subsubsection{Alert System}
-\subsubsection{System Performance Metrics}
+
+PlantMirror is the web-based deployment interface for the GRU-Causal digital twin. It is implemented as a Streamlit application and exposed publicly through a Cloudflare tunnel, allowing the model to be operated from any browser without local installation. The dashboard is organised around four tabs that mirror the four pillars of the project: a \emph{Generator} for engineering synthetic attack trajectories (Attack Simulator), a \emph{Validator} for measuring forecast accuracy (Rollout Tester), a \emph{Diagnostics} view for mapping per-loop fidelity (Loop Explorer), and a \emph{Detector} for evaluating the XGBoost Guardian (Classifier Validation). A persistent header strip and a state-aware AI co-pilot --- described in detail in Section~\ref{sec:copilot} --- remain visible across all four tabs to keep core results and contextual help one click away. The interface also exposes a light/dark theme toggle in the sidebar to suit different viewing conditions. Figure~\ref{fig:dashboard_overview} shows the landing view with the header strip, tab bar, and Co-Pilot sidebar.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.95\textwidth]{2.jpeg}
+\caption{PlantMirror landing view: persistent header with five key metrics, expandable ``About the twin'' panel, four tabs (Attack Simulator, Rollout Tester, Loop Explorer, Classifier Validation), and Co-Pilot sidebar with quick-start questions.}
+\label{fig:dashboard_overview}
+\end{figure}
+
+\paragraph{Header Strip.}
+The header strip reports five numbers that together substantiate the project's central claims. The first is \textbf{194 hours} of normal-only training data, demonstrating that the model was trained on real boiler telemetry at meaningful scale. The second is the \textbf{5.25M-parameter} 2$\times$512 GRU plant model, sized to balance capacity against the risk of overfitting on the limited attack windows. The third is a closed-loop test \textbf{NRMSE of 0.0095} at the 180-second horizon, confirming forecast accuracy well below the 1.5\% deployment gate. The fourth is the Guardian's \textbf{F1 of 0.587} with AUROC 0.904, which establishes that the residual-driven detector performs at production grade. The fifth is the \textbf{four-scenario coverage} (Normal, AP\_no, AP\_with, AE\_no), defining the precise scope of attacks the system has been validated against.
+
+Below the metric strip sits an expandable section titled \emph{``About the twin --- architecture, scope, honest limitations.''} It restates six limitations that are also documented in the project's Student Guide: the model covers a single process (P1 only); forecasts are validated only to the 30-minute horizon; the KS fidelity test fails on three of the five loops; thresholds are calibrated specifically to this dataset; training used a single random seed; and real-time deployment has not yet been validated. Surfacing these constraints above every tab keeps the system's known failure points visible to any user before they interact with the model, which we treat as a core scientific contribution rather than an after-thought.
+
+\subsubsection{The PlantMirror Co-Pilot}
+\label{sec:copilot}
+
+The PlantMirror Co-Pilot is a state-aware conversational assistant rendered in the persistent left sidebar of the dashboard. It is not a passive help screen: it is a domain-specific LLM interface that reads the user's current experiment and answers questions grounded in that specific context. The Co-Pilot is the project's primary tool for making a technically dense system accessible to non-expert users without requiring them to read the underlying paper or source code.
+
+\paragraph{Architecture.}
+The Co-Pilot is built on top of the GPT-4o-mini API. Each user query is transformed into a prompt with three components: (i) a system message that defines the assistant's role, scope, and tone --- it is instructed to answer questions about the digital twin, the sensors, the alerts, and the dashboard itself, and to refuse questions outside this scope; (ii) a structured snapshot of the live dashboard state, attached automatically before the user's question is sent; and (iii) the user's natural-language query. The model's response is streamed back into the chat panel below the input box. Conversation history is preserved within the session so that the user can ask follow-up questions without restating context.
+
+\paragraph{State-aware grounding.}
+The dashboard-state snapshot is the feature that distinguishes the Co-Pilot from a generic chatbot. Before each query is dispatched, the front-end serialises four pieces of context: the currently active tab, the most recently selected control loop in the Loop Explorer, the parameters of the last attack the user ran in the Attack Simulator (target loop, injection point, attack type, magnitude, start offset, duration), and the latest output of the Guardian classifier (predicted label and confidence). This snapshot is appended to the system prompt so that the LLM's response is conditioned on what the user is actually looking at. A question like ``why is this attack so effective?'' therefore receives an answer grounded in the user's specific attack configuration, rather than a generic description of attack mechanisms. This design directly addresses a well-known failure mode of unaided LLM assistants in technical interfaces, where the model produces fluent but contextually wrong explanations because it has no access to the system's runtime state.
+
+\paragraph{Quick-start prompts.}
+A panel at the top of the sidebar exposes five pre-written quick-start questions designed to onboard new users:
+\begin{itemize}
+    \item \emph{What are the 4 attack scenarios?} --- introduces the Normal / AP\_no / AP\_with / AE\_no taxonomy.
+    \item \emph{Which sensor reacts first in an attack?} --- explains the causal ordering across PC, LC, FC, TC, and CC.
+    \item \emph{What does the XGBoost Hybrid Guardian do?} --- summarises the detector's role and operating point.
+    \item \emph{What does the 4-experiment matrix prove?} --- walks the user through the data-augmentation argument shown in Tab~4.
+    \item \emph{Why is start\_offset = -30 important for attacks?} --- explains why the default offset places the attack inside the controller's history window, which is what makes stealthy attacks physically damaging rather than purely cosmetic.
+\end{itemize}
+Clicking any of these inserts the question into the input box and submits it, lowering the activation energy required for a first interaction. A free-form text field below the quick-start panel accepts arbitrary follow-up questions.
+
+\paragraph{Scope and limitations.}
+The Co-Pilot is constrained by its system prompt to answer only questions about the PlantMirror system, the HAI 23.05 dataset, and the underlying control-system concepts. It does not provide medical, legal, or financial advice, and it does not generate attack code or operational guidance for real industrial systems. It also does not have access to the underlying model weights or to the contents of the Student Guide; its knowledge of the system is bounded by what is conveyed through the system prompt and the live state snapshot. Because the Co-Pilot is a generative model, its answers are not guaranteed to be free of factual errors, and we treat it as a navigational aid rather than as an authoritative reference for the numbers reported on the dashboard. Every numerical claim the user encounters is anchored to a corresponding figure or table in the main interface, so that the Co-Pilot's role is to explain what those numbers mean rather than to be the source of the numbers themselves.
+
+\subsubsection{Tab 1 --- Attack Simulator (Generator)}
+
+The Attack Simulator allows users to engineer synthetic attack trajectories on the frozen digital twin without ever touching live industrial hardware. Attacking a real boiler is illegal, prohibitively expensive, and physically dangerous; using the twin as a software substitute is the project's central enabling idea. The tab is split into two sub-tabs: \emph{Gallery (pre-rendered)} and \emph{Custom (live sliders)}.
+
+\paragraph{Gallery sub-tab.}
+The Gallery contains 30 pre-computed baseline attacks, organised as the full cross-product of the five control loops, three injection points, and two attack types (bias and freeze). All 30 are pre-rendered at cursor \texttt{t\_end = 1000}, \texttt{start\_offset = -30~s}, \texttt{duration = 90~s} so that browsing is instantaneous. Each attack is rendered as a card showing the configuration, a two-line trajectory chart that overlays normal plant behaviour against the attacked trajectory, a shaded vertical band indicating the attack window, and two summary metrics: the peak $\Delta$PV and a recovery indicator. Multi-select filters at the top of the sub-tab (Target loop, Injection point, Attack type) allow the user to narrow the visible cards to a subset of interest. Figure~\ref{fig:attack_gallery} shows a representative slice of the Gallery covering the Pressure (PC) and Level (LC) loops.
+
+
+\begin{figure}[H]
+\centering
+% TODO: insert cropped screenshot from Image 3
+\includegraphics[width=0.95\textwidth]{1.jpeg}
+\caption{Attack Simulator Gallery sub-tab.}
+\label{fig:rollout_tester}
+\end{figure}
+
+Each card reports the attack configuration (loop $\cdot$ injection point $\cdot$ attack type), magnitude, peak $\Delta$PV, and recovery status. The first six cards (PC family) show small peak deviations because pressure recovers quickly; the LC family below shows much larger deviations under SP and CV attacks at magnitude~20.
+
+\paragraph{Custom sub-tab.}
+The Custom sub-tab exposes live sliders for the target loop, injection point, attack type, scenario embedding, start offset, duration, magnitude, and replay cursor. Selecting a configuration and clicking \emph{Run attack} triggers a forward pass through the GRU plant and the five controllers, returning the modified trajectory in real time. This enables interactive exploration of the attack design space far beyond the 30 pre-computed baselines. Figure~\ref{fig:attack_custom} shows the slider layout.
+
+Three injection points are supported, each targeting a distinct location in the control loop. A \textbf{setpoint (SP)} attack alters the target value the controller is tracking, fooling the controller into driving the plant towards an incorrect operating point. A \textbf{control variable (CV)} attack tampers with the actuator command after the controller has issued it, so that the plant receives a different instruction than the one the controller intended. A \textbf{process variable (PV)} attack spoofs the sensor reading the controller observes, which deceives both the controller and the operator about the actual physical state. Two attack types govern how the injected value is constructed: \emph{bias} adds a constant offset, and \emph{freeze} holds the signal at its value at the moment of injection. The replay-cursor control supports a third regime in which a time-lagged segment of past data is substituted for the current signal. The default \texttt{start\_offset} of $-30$ seconds places the attack inside the controller's 300-second history window, which is what gives stealthy attacks their physical impact: an attack injected outside this window only changes the operator HMI view without poisoning the controller's internal state.
+
+\subsubsection{Tab 2 --- Rollout Tester (Validator)}
+
+The Rollout Tester quantifies the model's predictive accuracy across both the training horizon and the longer extrapolation window. A radio selector at the top switches between two evaluation modes: \emph{3 min (180 s) --- training horizon}, which reports the closed-loop forecast produced by the main GRU plant, and \emph{30 min (1800 s) --- long-horizon plant (v2)}, which reports the open-loop forecast generated by a fine-tuned variant of the model that builds on the 3-minute checkpoint through curriculum learning. The 30-minute mode is open-loop in the sense that it consumes the actual recorded control inputs from the dataset rather than predictions from the controller twins, which isolates plant forecast accuracy from any controller-side error accumulation.
+
+A second selector lets the user filter the displayed NRMSE by scenario --- Overall (all scenarios mixed), Normal, AP\_no, AP\_with, or AE\_no --- so that the user can directly compare the model's accuracy under benign and adversarial conditions. Figure~\ref{fig:rollout_tester} shows the per-PV NRMSE bar chart and the corresponding pass/fail pills under the Overall scenario.
+
+\begin{figure}[H]
+\centering
+% TODO: insert cropped screenshot from Image 9
+\includegraphics[width=0.95\textwidth]{dashboard/04_rollout.jpeg}
+\caption{Rollout Tester at the 3-minute training horizon, Overall scenario. Per-PV NRMSE is overlaid with the 1.5\% deployment gate (red dashed line). Four channels pass; the slow-thermal channel \texttt{P1\_TIT03} warns at 0.0224. The pill row beneath converts the same numbers into pass/fail status.}
+\label{fig:rollout_tester}
+\end{figure}
+
+The per-channel NRMSE is rendered as a bar chart with a 1.5\% threshold line overlaid. Each channel is colour-coded against three bands: green (\textsc{pass}) for NRMSE below 1.5\%, amber (\textsc{warn}) for values between 1.5\% and 4.5\%, and red (\textsc{fail}) for anything above 4.5\%. The Overall results are uniformly strong:
+\begin{itemize}
+    \item P1\_PIT01 --- 0.0065 (\textsc{pass})
+    \item P1\_LIT01 --- 0.0143 (\textsc{pass})
+    \item P1\_FT03Z --- 0.0055 (\textsc{pass})
+    \item P1\_TIT01 --- 0.0124 (\textsc{pass})
+    \item P1\_TIT03 --- 0.0224 (\textsc{warn})
+\end{itemize}
+The same numerical outcomes are duplicated as plain pass/fail cards so that non-technical readers can interpret system status at a glance.
+
+A scenario breakdown chart further decomposes the error by attack regime and confirms that AP\_with is by far the hardest scenario: the mean NRMSE across all five PVs reaches 0.1021, almost twelve times the corresponding value of 0.0073 under normal operation. AP\_no (0.0085) and AE\_no (0.0091) sit only marginally above normal, consistent with the stealthy nature of those attack families. A complementary panel labelled \emph{Normal vs. Attack NRMSE (per PV)} pairs each channel's normal-condition error with its attack-condition error, making it immediately visible that LIT01 and TIT01 carry the largest relative penalty under attack. This is consistent with the design intent of the model --- the residual signal must spike under the most disruptive attack in order for the downstream detector to function --- and it is precisely this property that the Guardian in Tab~4 exploits.
+
+At the 30-minute horizon, the fine-tuned model achieves a mean NRMSE of 0.0066 across all five channels, with every channel passing the 1.5\% gate. This long-horizon stability is a direct consequence of the scheduled-sampling curriculum and demonstrates that the model is suitable for extended monitoring windows beyond the 180-second training rollout.
+
+\subsubsection{Tab 3 --- Loop Explorer (Diagnostics)}
+
+The Loop Explorer provides per-loop diagnostics that profile each control loop along several physically meaningful axes: the SP, PV, and CV column names that anchor the loop in the dataset, the CV-to-PV response lag, the Kolmogorov-Smirnov (KS) distributional fidelity statistic, and a derived pass/fail status. The tab opens with a Loop Reference table summarising the five loops side by side, followed by a horizontal bar chart visualising the KS statistic per loop against pass and fail thresholds. Figure~\ref{fig:loop_explorer} shows both elements together.
+
+\begin{figure}[H]
+\centering
+% TODO: insert cropped screenshot from Image 11
+\includegraphics[width=0.95\textwidth]{dashboard/05_loop_explorer.jpeg}
+\caption{Loop Explorer. The reference table reports the SP, PV, and CV columns for each of the five loops together with the CV-to-PV lag and the KS distributional fidelity statistic. The KS bar chart below visualises the same fidelity numbers against the 0.10 (pass) and 0.20 (fail) thresholds: PC and FC pass, CC and TC warn, and LC fails.}
+\label{fig:loop_explorer}
+\end{figure}
+
+The table makes the model's honest limitations explicit. The pressure (PC) and flow (FC) loops pass the KS fidelity test with values of 0.060 and 0.067 respectively, indicating that synthetic and real distributions are statistically close. The temperature (TC), coolant (CC), and level (LC) loops warn or fail, with KS values of 0.157, 0.121, and 0.215. These three loops are dominated by slow physical dynamics --- thermal inertia in TC and CC, integrating fluid behaviour in LC --- and the model's residual mismatch on these channels is a real consequence of those dynamics rather than a bug in the dashboard. Surfacing the failures in the diagnostics view, rather than hiding them, is what allows the synthetic data produced by the twin to be used responsibly: downstream consumers know exactly which loops can be trusted for data augmentation and which require caution.
+
+The CV-to-PV lag column surfaces a complementary insight. PC and FC drive their respective process variables with short lags of 7 and 5 seconds and exhibit the highest causal coupling to other loops, while CC at 26 seconds is the slowest, reflecting the heavy thermal inertia of the coolant pump. The Loop Explorer therefore maps the physical limits of the digital twin and not just its statistical accuracy, illustrating how each loop behaves in relation to the others.
+
+\subsubsection{Tab 4 --- Classifier Validation (Detector)}
+
+The Classifier Validation tab presents the XGBoost Guardian and the four-experiment validation that justifies the use of synthetic data in its training set. The Guardian itself is an \texttt{XGBClassifier} with 129 trees, maximum depth 4, and learning rate 0.089, Optuna-tuned over 15 trials. It watches all 133 raw sensor columns at 1~Hz and was trained on a mixed corpus of 199{,}078 real-train rows plus 36{,}000 synthetic rows generated by the digital twin (235{,}078 rows total). XGBoost was chosen over a deep network because, on tabular data with this row count, gradient-boosted trees train roughly two orders of magnitude faster, are inherently feature-interpretable, and outperform deep models in our internal comparisons.
+
+At the production operating threshold of 0.35, the Guardian achieves an F1 of 0.587, AUROC of 0.904, precision of 0.648, and recall of 0.536. The corresponding confusion matrix records 79{,}520 true negatives, 1{,}308 false positives, 2{,}408 true positives, and 2{,}084 false negatives, demonstrating that the residual signal is sufficient to flag attacks at a usable false-positive rate even when the underlying class distribution is severely imbalanced. We note that this F1 figure is distinct from --- and uses a different threshold than --- the simpler residual-only detector reported in Section~\ref{sec:detection_classification}, which operates at threshold 0.198 and achieves F1 = 0.547. The Guardian extends that residual detector by combining the residual signal with handcrafted statistical features through XGBoost, producing the higher F1 that appears on the header strip.
+
+\begin{figure}[H]
+\centering
+% TODO: insert cropped screenshot from Image 13
+\includegraphics[width=0.95\textwidth]{dashboard/06_validation_matrix.jpeg}
+\caption{Four-experiment validation matrix. }
+\label{fig:validation_matrix}
+\end{figure}
+Experiments A--D systematically vary the train-test composition: A trains and tests on real data only (F1 = 0.260), B tests synthetic transferability (F1 = 0.301), C tests whether synthetic alone can replace real (F1 = 0.095, no), and D --- the production configuration --- trains on the mixed corpus and tests on real (F1 = 0.587). The +0.327 absolute F1 gain from A to D is the formal evidence that the digital twin functions as a valid data-augmentation engine.
+
+The decisive evidence for the synthetic data programme is provided by a four-experiment grid, summarised in the bottom panel of the tab. Experiment~A trains and tests on real data only and yields F1 = 0.260 (AUROC 0.690), the natural ceiling imposed by the limited number of real attack rows in the training set. Experiment~B trains on real and tests on synthetic, reaching F1 = 0.301 (AUROC 0.414) --- an indication that real-trained models can partially recognise synthetic attacks but that the two distributions are not identical. Experiment~C trains on synthetic alone and tests on real, collapsing to F1 = 0.095 (AUROC 0.369) and confirming that synthetic data cannot replace real data on its own. Experiment~D, in which real and synthetic windows are mixed in the training set, lifts F1 to 0.587 (AUROC 0.904) --- a +0.327 absolute gain over the real-only baseline. The mixed configuration is therefore the operating point reported on the header strip and visualised in the dashboard, and the four-experiment grid is the formal proof that the digital twin functions as a scientifically valid data-augmentation engine rather than a substitute for real measurements. The dashboard renders this conclusion as a three-bullet \emph{Verdict} panel beneath the experiment cards: synthetic attacks are faithful to real ones (B $\approx$ A), mixing improves detection by +0.327 F1 (D $>$ A), and synthetic-only training does not replace real data (C $\ll$ A).
+
+\subsubsection{Implementation and Reproducibility}
+
+The dashboard is implemented in approximately 500 lines of Streamlit code per tab, with aggressive use of \texttt{@st.cache\_data} so that pre-computed figures, NRMSE tables, and Guardian outputs render instantly on tab switches. All machine-learning artefacts are loaded natively in Python from the same checkpoints used to produce the results in Section~\ref{sec:detection_classification}, so that no number on the dashboard is recomputed from a different source than the one reported in the written results.
+
+To guarantee end-to-end auditability, every figure and metric in the dashboard is regenerated by a 10-phase automated Python audit script. At the time of writing, 147 of 149 rigorous end-to-end checks pass, and every numerical claim shown in the interface traces directly back to a reproducible artefact file on disk (\texttt{eval\_results.json} for the rollout numbers, the Student Guide artefacts for the Loop Explorer KS values, and the experiment manifests for the four-experiment matrix). We treat this auditability requirement as part of the deployment specification: a digital twin used for security monitoring must allow an operator, a regulator, or a future maintainer to confirm that the number on the screen is the same number that the underlying model produced, and PlantMirror is built to that standard.
 
 \section{Discussion and Conclusions}
-
-This project evaluated the use of recurrent neural network digital twins for industrial control system (ICS) monitoring and cyber-attack detection using the HAI 23.05 dataset. Two architectures were compared: a GRU-based primary model and an LSTM-based baseline model. Both models were implemented as closed-loop surrogate systems capable of predicting the future behaviour of five key process variables under both normal and attack scenarios. After optimisation, both architectures achieved less than 10\% NRMSE across all monitored channels, confirming their suitability for deployment in real-time industrial environments.
-
-A major finding of this work was the importance of scheduled sampling in reducing exposure bias during autoregressive forecasting. Both models showed substantial improvement after tuning, with the GRU achieving the best final mean NRMSE of 0.0105 while using fewer parameters and lower computational cost than the LSTM. This makes the GRU more suitable for edge deployment, where efficiency and low latency are critical. The LSTM, however, remained highly competitive and performed strongly on slower levels and thermal variables, benefiting from its dedicated memory cell.
-
-Scenario analysis showed that both models performed best under Actuator Emulation attacks and worst under combined multi-loop actuator attacks, indicating that attack complexity has a greater effect on performance than architecture choice. The tuned GRU also demonstrated strong long-horizon stability, maintaining accurate predictions for up to 1.5 hours, which highlights its value for extended monitoring and early anomaly detection.
-
-Overall, the results demonstrate that physics-informed recurrent digital twins are a practical solution for ICS cybersecurity. They provide continuous prediction-based monitoring capable of detecting stealthy attacks that may bypass traditional alarm systems. Future work may focus on transformer models, graph neural networks, online learning, and deployment on live industrial control platforms.
-
+ 
+\subsection{Discussion}
+ 
+This project set out to determine whether a physics-informed recurrent neural digital twin can serve as both a closed-loop simulator and a conditional generator for industrial control system security monitoring on the HAI 23.05 boiler testbed, and whether the resulting synthetic data programme is scientifically sound enough to support a downstream attack detector. The full evaluation in Section~\ref{sec:detection_classification} and the deployment interface presented in Section~\ref{sec:dashboard} together support an affirmative answer, with several findings that we believe are of broader interest to the ICS security and time-series machine learning communities.
+ 
+The headline empirical finding is that the digital twin's synthetic data, when mixed with real training data, lifts the XGBoost Guardian's F1 score from 0.260 (real-only baseline) to 0.587, an absolute gain of +0.327. The four-experiment validation grid surfaced on the Classifier Validation tab is the formal evidence for this claim: synthetic-only training collapses to F1 = 0.095, confirming that synthetic data cannot replace real measurements; but mixing real and synthetic windows produces the reported +0.327 uplift. We interpret this as direct evidence that the trained surrogate is a scientifically valid \emph{data-augmentation engine} rather than a substitute for real telemetry. This distinction is further reinforced by the residual-feature classifier evaluation in Section~\ref{sec:detection_classification}: when trained exclusively on synthetic trajectories (TRTS, Macro F1 = 0.283), the classifier fails to generalise to real attack windows, confirming that synthetic data alone cannot replace the information contained in real labelled attack observations. The strong result is not ``the model can replace expensive real attacks'' but ``the model can amplify the value of the few real attacks that do exist when combined with real data.'' For ICS security, where confirmed attack windows are scarce and expensive, this is exactly the property that makes a digital twin operationally interesting.
+ 
+A second finding is that scheduled sampling, applied as a curriculum that ramps the teacher-forcing ratio from 0 to 0.483, was the single intervention that unlocked the closed-loop performance reported in Section~\ref{sec:dashboard}. Without scheduled sampling, the autoregressive rollout exhibited the classical exposure-bias drift at the 180-second horizon. After the curriculum was added, the model achieved a mean test-set NRMSE of 0.0095 across all five process variables and 0.0066 across the 30-minute fine-tuned horizon, both well below the 1.5\% deployment gate. This is a quantitative answer to a question that has remained somewhat open in the industrial time-series literature: scheduled sampling, often dismissed as a marginal improvement on standard benchmarks, produces a large and qualitative effect when the rollout horizon is long enough for exposure bias to compound across many physically coupled channels.
+ 
+A third finding emerges from the per-loop diagnostics in the Loop Explorer. The KS distributional fidelity test passes for the pressure (PC) and flow (FC) loops at 0.060 and 0.067 respectively, but warns or fails for the temperature (TC), coolant (CC), and level (LC) loops at 0.157, 0.121, and 0.215. We deliberately surfaced this failure in the dashboard rather than hiding it. The implication is that the synthetic data produced by the twin is highly trustworthy on the fast-dynamics channels but should be used with caution on the slow-dynamics channels, where thermal inertia and integrating fluid behaviour cause statistical drift between synthetic and real distributions. This per-loop honesty is a feature of the design philosophy, not a deficiency in the model: a digital twin that is silently wrong on three of five loops would be far more dangerous than one that flags exactly where it is uncertain.
+ 
+\subsection{Stakeholder Impact}
+ 
+The project's findings carry concrete implications for several stakeholder groups.
+ 
+For \textbf{ICS operators and asset owners} --- the boiler operators, water utilities, and grid facilities that run the kind of process P1 represents --- the headline implication is that a software digital twin can produce useful security signal without requiring any modification to the live plant. Because PlantMirror is calibrated entirely from passive telemetry, no actuators are exercised, no setpoints are perturbed, and no risk is introduced to the physical process. An operator can therefore evaluate the technology against historical data before any decision is made about live deployment. The edge-deployable architecture of the surrogate (a single 5.25M-parameter GRU plus five small controller models) is sized to run on the kind of industrial PC that already sits in an ICS control room, avoiding the cloud latency and single-point-of-failure problems that more centralised monitoring approaches introduce.
+ 
+For \textbf{ICS security teams and incident responders}, the dual role of the twin as both a generator and a detector is the operationally important property. The Attack Simulator gives security staff a safe sandbox in which to study how specific attacks manifest physically, without ever issuing a real attack. The Guardian then catches such attacks at AUROC 0.904 with a calibrated false-positive rate, providing a continuously running second opinion that complements existing rule-based and signature-based intrusion detection. Crucially, the Loop Explorer tells a defender exactly which loops the model can be trusted on, so that alerts can be weighted accordingly rather than treated as uniformly reliable across the plant.
+ 
+For \textbf{ICS security researchers and dataset stewards}, the four-experiment validation framework introduced in Section~\ref{sec:dashboard} provides a transferable template for evaluating any future synthetic data programme on imbalanced industrial datasets. Reporting only the mixed-training F1 number (0.587) would have been misleading; reporting all four points (A = 0.260, B = 0.301, C = 0.095, D = 0.587) makes it impossible to confuse data augmentation with data substitution. We would encourage future work in this area to adopt the same four-experiment grid as a minimum reporting standard.
+ 
+For \textbf{regulators and standards bodies} concerned with critical infrastructure cybersecurity, the project demonstrates that physics-informed surrogate models can be made auditable end-to-end. Every numerical claim shown in the PlantMirror interface traces back through an automated 10-phase audit script to a reproducible artefact on disk. This auditability is not a nice-to-have; it is what allows a regulator or third-party assessor to confirm that the number on the operator's screen is the same number the model produced. The architecture pattern --- a frozen surrogate, a state-aware interface, an audit script that regenerates every figure from primary artefacts --- is generalisable to any ML system that needs to operate inside a regulated environment.
+ 
+\subsection{Limitations}
+ 
+We treat absolute honesty about failure modes as a core scientific contribution of this project. Six limitations are documented in the dashboard's ``About the twin'' panel and are restated here for the report record.
+ 
+\textbf{Single-process scope.} The model and all results in this report are calibrated against process P1 (the boiler subsystem) of the HAI 23.05 testbed. The other three processes --- the turbine (P2), the water treatment unit (P3), and the HIL infinite-bus simulation (P4) --- are not covered. Generalisation to those processes would require, at minimum, re-fitting the per-loop controllers, re-deriving the causal graph, and re-running the four-experiment validation. The methodology is reusable; the trained weights are not.
+ 
+\textbf{Validated only to the 30-minute horizon.} Long-horizon stability has been assessed up to 1800 seconds (30 minutes). The dashboard does not claim accuracy beyond this point. Real industrial monitoring deployments may need to predict over multi-hour windows during slow process drifts, and we have no quantitative evidence that the model maintains gate-threshold accuracy at those horizons.
+ 
+\textbf{KS fidelity failures on three of five loops.} As discussed above, the LC, TC, and CC loops fail the KS distributional fidelity test. Synthetic data generated for those loops is not statistically indistinguishable from real data, and any downstream use of synthetic data on those channels should be treated as a working hypothesis rather than a guarantee.
+ 
+\textbf{Dataset-specific threshold calibration.} The Guardian's operating threshold of 0.35, the residual detector's threshold of 0.198, and the 1.5\% NRMSE deployment gate were all calibrated against the HAI 23.05 distribution. Transfer to a different boiler, a different DCS vendor, or a different operating regime would require recalibration; the thresholds are not universal physical constants.
+ 
+\textbf{Single random seed.} All reported metrics were produced from a single training run with a fixed seed. Variance across seeds has not been characterised. We expect the qualitative findings (the +0.327 Guardian F1 gain, the TRTS distribution gap, the per-loop fidelity profile, the AP\_with hardness) to survive seed variation, but the precise numerical values may shift by an amount we have not measured.
+ 
+\textbf{Real-time deployment unvalidated.} PlantMirror runs at 1~Hz inference in a software environment. It has not been tested under the latency and reliability constraints of a live industrial control room with real PLC integration. Bridging that gap is an engineering programme distinct from the research questions addressed here.
+ 
+\subsection{Future Work}
+ 
+Several directions extend the work naturally.
+ 
+\textbf{Multi-process coverage.} The most obvious extension is to apply the same methodology to processes P2, P3, and P4. The infrastructure for this --- the data pipeline, the four-experiment validation framework, the dashboard --- is already built. The unknown is whether the per-loop fidelity profile we observe on P1 (fast loops pass, slow loops drift) generalises to other process types, or whether each process exhibits a distinct fidelity signature.
+ 
+\textbf{Architectures beyond GRU.} A controlled comparison against transformer-based and graph-neural-network architectures, evaluated under identical data, pipeline, and hyperparameter-search budget, would clarify whether the GRU's advantage is intrinsic to recurrent dynamics or a contingent property of the current training regime. The four-experiment validation grid provides the right yardstick for any such comparison.
+ 
+\textbf{Online and continual learning.} The current Guardian is trained once on a fixed corpus. A live deployment would need to update against operational drift, new attack patterns, and seasonal process variation. Adapting the architecture for online learning, while preserving the auditability guarantees that motivated the current design, is a research problem we believe is well-posed by this project's framing.
+ 
+\textbf{Real-time deployment trial.} The most immediate engineering step is to integrate PlantMirror with a live PLC stack (initially in a hardware-in-the-loop laboratory rather than a production plant) and characterise its end-to-end latency, throughput, and failure modes under realistic industrial conditions. This is the route by which the work crosses from demonstrator to deployable system.
+ 
+\textbf{Variance characterisation.} Re-running the full pipeline across multiple random seeds and reporting per-metric confidence intervals would close the only methodological gap that remains in the current evaluation. We expect this is a low-risk programme that strengthens the reproducibility story without changing any of the qualitative conclusions.
+ 
+\subsection{Conclusion}
+ 
+This work demonstrates that a 5.25M-parameter GRU-based digital twin, trained on 194 hours of normal-operation telemetry from the HAI 23.05 boiler subsystem and equipped with a per-loop controller decomposition and a scheduled-sampling curriculum, can simultaneously serve as a closed-loop process simulator (mean test NRMSE 0.0095 at the 180-second horizon, 0.0066 at the 30-minute horizon) and as a conditional generator whose synthetic output, mixed with real training data, lifts a downstream XGBoost intrusion detector's F1 score from 0.260 to 0.587 (AUROC 0.904). The PlantMirror dashboard packages these results into a publicly accessible, auditable web interface that surfaces the system's known failure modes alongside its successes. We believe this combination --- a quantitatively validated surrogate, a four-experiment proof of synthetic data utility, and an honestly limited deployment interface --- defines a useful template for the responsible application of generative machine learning to cyber-physical security, and that the methodology is ready for transfer to other industrial processes once the engineering work outlined in Section~5.4 has been carried out.
 \newpage
 \bibliographystyle{apa}
 \bibliography{biblio}

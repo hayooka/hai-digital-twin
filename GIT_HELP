@@ -3,7 +3,6 @@ git add .
 git commit -m "edit"
 git push
 
-
 📌 الطريقة الكاملة (لو أول مرة أو برانش جديد)
 git status                 # شو تغيّر؟
 git add .                  # إضافة كل الملفات

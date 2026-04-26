@@ -6,7 +6,7 @@ import numpy as np
 import joblib
 import os
 from typing import Dict, Tuple, List, Optional
-from config import LOOPS, PV_COLS, PROCESSED_DATA_DIR
+from config import LOOPS, PV_COLS, HAIEND_COLS, PROCESSED_DATA_DIR
 
 
 def load_preprocessed_data(data_dir: Optional[str] = None) -> Dict:
@@ -54,34 +54,38 @@ def _feature_indices(sensor_cols: List[str], target_cols: List[str]) -> List[int
 
 def prepare_plant_data(raw: Dict, split: str = 'train') -> Tuple:
     """
-    Split windows into plant inputs (all non-PV features) and plant outputs (PV signals).
+    Split windows into plant inputs (all non-PV features) and plant outputs.
 
     Teacher forcing: pv_teacher == pv_target — both carry the true PV trajectory
     so the training loop can choose its own scheduled-sampling ratio.
 
     Returns:
-        x_cv        : (N, input_len,  n_plant_in)  non-PV input window
-        x_cv_target : (N, target_len, n_plant_in)  non-PV target window (plant decoder needs this)
-        pv_init     : (N, n_pv)                    PV at the last input step
-        pv_teacher  : (N, target_len, n_pv)        true PV for teacher forcing
-        pv_target   : (N, target_len, n_pv)        loss target (same array)
-        scenario    : (N,)
+        x_cv          : (N, input_len,  n_plant_in)   non-PV input window
+        x_cv_target   : (N, target_len, n_plant_in)   non-PV target window
+        pv_init       : (N, n_pv)                     PV at the last input step
+        pv_teacher    : (N, target_len, n_pv)         true PV for teacher forcing
+        pv_target     : (N, target_len, n_pv)         PV loss target
+        haiend_target : (N, target_len, n_haiend)     internal PLC signals (AE attack footprint)
+        scenario      : (N,)
     """
-    sensor_cols = raw['sensor_cols']
-    pv_idx      = _feature_indices(sensor_cols, PV_COLS)
-    non_pv_idx  = [i for i in range(len(sensor_cols)) if i not in pv_idx]
+    sensor_cols  = raw['sensor_cols']
+    pv_idx       = _feature_indices(sensor_cols, PV_COLS)
+    haiend_idx   = _feature_indices(sensor_cols, HAIEND_COLS)
+    non_pv_idx   = [i for i in range(len(sensor_cols)) if i not in pv_idx]
 
     X        = raw[f'X_{split}']
     y        = raw[f'y_{split}']
     scenario = raw[f'scenario_{split}']
 
-    x_cv        = X[:, :, non_pv_idx]
-    x_cv_target = y[:, :, non_pv_idx]          # CV/aux for the target window
-    pv_init     = X[:, -1, :][:, pv_idx]       # last input-step PV
-    pv_teacher  = y[:, :, pv_idx]
-    pv_target   = y[:, :, pv_idx]
+    x_cv          = X[:, :, non_pv_idx]
+    x_cv_target   = y[:, :, non_pv_idx]
+    pv_init       = X[:, -1, :][:, pv_idx]
+    pv_teacher    = y[:, :, pv_idx]
+    pv_target     = y[:, :, pv_idx]
+    haiend_target = y[:, :, haiend_idx] if haiend_idx else np.zeros(
+        (y.shape[0], y.shape[1], 0), dtype=np.float32)
 
-    return x_cv, x_cv_target, pv_init, pv_teacher, pv_target, scenario
+    return x_cv, x_cv_target, pv_init, pv_teacher, pv_target, haiend_target, scenario
 
 
 def prepare_controller_data(raw: Dict, loop_name: str, split: str = 'train') -> Tuple:
@@ -130,12 +134,14 @@ def prepare_controller_data(raw: Dict, loop_name: str, split: str = 'train') -> 
     return X_ctrl, y_ctrl, scenario
 
 
-def get_plant_input_output_dims(sensor_cols: List[str]) -> Tuple[int, int]:
-    """Return (n_plant_in, n_pv) — number of non-PV and PV features."""
-    pv_idx    = _feature_indices(sensor_cols, PV_COLS)
-    n_pv      = len(pv_idx)
+def get_plant_input_output_dims(sensor_cols: List[str]) -> Tuple[int, int, int]:
+    """Return (n_plant_in, n_pv, n_haiend)."""
+    pv_idx     = _feature_indices(sensor_cols, PV_COLS)
+    haiend_idx = _feature_indices(sensor_cols, HAIEND_COLS)
+    n_pv       = len(pv_idx)
+    n_haiend   = len(haiend_idx)
     n_plant_in = len(sensor_cols) - n_pv
-    return n_plant_in, n_pv
+    return n_plant_in, n_pv, n_haiend
 
 
 def load_and_prepare_data(data_dir: Optional[str] = None) -> Dict:
@@ -151,11 +157,11 @@ def load_and_prepare_data(data_dir: Optional[str] = None) -> Dict:
     sensor_cols = raw['sensor_cols']
 
     # Plant splits
-    x_cv,      x_cv_tgt,      pv_init,      pv_teacher,      pv_target,      sc_train = prepare_plant_data(raw, 'train')
-    x_cv_val,  x_cv_tgt_val,  pv_init_val,  pv_teacher_val,  pv_target_val,  sc_val   = prepare_plant_data(raw, 'val')
-    x_cv_test, x_cv_tgt_test, pv_init_test, pv_teacher_test, pv_target_test, sc_test  = prepare_plant_data(raw, 'test')
+    x_cv,      x_cv_tgt,      pv_init,      pv_teacher,      pv_target,      haiend_tr,   sc_train = prepare_plant_data(raw, 'train')
+    x_cv_val,  x_cv_tgt_val,  pv_init_val,  pv_teacher_val,  pv_target_val,  haiend_val,  sc_val   = prepare_plant_data(raw, 'val')
+    x_cv_test, x_cv_tgt_test, pv_init_test, pv_teacher_test, pv_target_test, haiend_test, sc_test  = prepare_plant_data(raw, 'test')
 
-    n_plant_in, n_pv = get_plant_input_output_dims(sensor_cols)
+    n_plant_in, n_pv, n_haiend = get_plant_input_output_dims(sensor_cols)
 
     # Controller splits (all five loops, train + val + test)
     ctrl_data = {}
@@ -173,18 +179,22 @@ def load_and_prepare_data(data_dir: Optional[str] = None) -> Dict:
         'plant': {
             'X_train': x_cv,           'X_cv_target_train': x_cv_tgt,
             'pv_init_train': pv_init,  'pv_teacher_train': pv_teacher,
-            'pv_target_train': pv_target, 'scenario_train': sc_train,
+            'pv_target_train': pv_target, 'haiend_target_train': haiend_tr,
+            'scenario_train': sc_train,
             'attack_train': raw['attack_train'],
             'X_val':   x_cv_val,       'X_cv_target_val': x_cv_tgt_val,
             'pv_init_val': pv_init_val,'pv_teacher_val': pv_teacher_val,
-            'pv_target_val': pv_target_val, 'scenario_val': sc_val,
+            'pv_target_val': pv_target_val, 'haiend_target_val': haiend_val,
+            'scenario_val': sc_val,
             'attack_val': raw['attack_val'],
             'X_test':  x_cv_test,      'X_cv_target_test': x_cv_tgt_test,
             'pv_init_test': pv_init_test,'pv_teacher_test': pv_teacher_test,
-            'pv_target_test': pv_target_test, 'scenario_test': sc_test,
+            'pv_target_test': pv_target_test, 'haiend_target_test': haiend_test,
+            'scenario_test': sc_test,
             'attack_test': raw['attack_test'],
             'n_plant_in': n_plant_in,
             'n_pv':       n_pv,
+            'n_haiend':   n_haiend,
         },
         'ctrl': ctrl_data,
         'metadata': {
@@ -207,7 +217,7 @@ def print_preprocessing_summary(data: Dict):
     print(f"    Train : X={p['X_train'].shape},  target={p['pv_target_train'].shape}")
     print(f"    Val   : X={p['X_val'].shape},    target={p['pv_target_val'].shape}")
     print(f"    Test  : X={p['X_test'].shape},   target={p['pv_target_test'].shape}")
-    print(f"    Input dim : {p['n_plant_in']}  |  Output dim (PV): {p['n_pv']}")
+    print(f"    Input dim : {p['n_plant_in']}  |  Output dim (PV): {p['n_pv']}  |  HAIEND targets: {p['n_haiend']}")
 
     print("\n  SCENARIO DISTRIBUTION:")
     print(f"    Train : {np.bincount(p['scenario_train'])}")

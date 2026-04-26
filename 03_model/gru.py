@@ -293,12 +293,14 @@ class GRUPlant(nn.Module):
                  hidden: int = 256, layers: int = 2,
                  n_scenarios: int = 4, emb_dim: int = 32,
                  dropout: float = 0.1,
-                 scenario_heads: bool = False):
+                 scenario_heads: bool = False,
+                 n_haiend: int = 0):
         super().__init__()
         self.n_plant_in     = n_plant_in
         self.n_pv           = n_pv
         self.n_scenarios    = n_scenarios
         self.scenario_heads = scenario_heads
+        self.n_haiend       = n_haiend
         drop = dropout if layers > 1 else 0.0
 
         self.scenario_emb = nn.Embedding(n_scenarios, emb_dim)
@@ -323,10 +325,23 @@ class GRUPlant(nn.Module):
                 nn.Linear(128, n_pv),
             )
 
+        # Second output head: predicts internal PLC function block signals (HAIEND).
+        # These are the exact channels AE attacks manipulate, so residuals here
+        # expose AE attack footprints that are invisible in PV residuals alone.
+        if n_haiend > 0:
+            self.haiend_head = nn.Sequential(
+                nn.Linear(hidden, 128),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(128, n_haiend),
+            )
+        else:
+            self.haiend_head = None
+
     def forward(self, x_cv: torch.Tensor, x_cv_target: torch.Tensor,
                 pv_init: torch.Tensor, scenario: torch.Tensor,
                 pv_teacher: Optional[torch.Tensor] = None,
-                ss_ratio: float = 0.0) -> torch.Tensor:
+                ss_ratio: float = 0.0):
         """
         x_cv:        (B, input_len,  n_plant_in)  CV/aux input window
         x_cv_target: (B, target_len, n_plant_in)  CV/aux target window
@@ -334,7 +349,8 @@ class GRUPlant(nn.Module):
         scenario:    (B,) int  0–3
         pv_teacher:  (B, target_len, n_pv)        teacher PV (optional)
         ss_ratio:    scheduled sampling ratio
-        → (B, target_len, n_pv)
+        → pv_out      (B, target_len, n_pv)
+          haiend_out  (B, target_len, n_haiend)  or None if n_haiend == 0
         """
         B, T_target, _ = x_cv_target.shape
 
@@ -343,7 +359,8 @@ class GRUPlant(nn.Module):
         _, h = self.encoder(torch.cat([x_cv, emb], dim=-1))
 
         pv = pv_init
-        outputs = []
+        pv_outputs     = []
+        haiend_outputs = []
 
         for t in range(T_target):
             dec_in = torch.cat([x_cv_target[:, t, :], pv], dim=-1).unsqueeze(1)
@@ -357,7 +374,10 @@ class GRUPlant(nn.Module):
                         pv_pred[mask] = self.fc_heads[sc_id](h_out[mask])
             else:
                 pv_pred = self.fc(h_out)
-            outputs.append(pv_pred)
+            pv_outputs.append(pv_pred)
+
+            if self.haiend_head is not None:
+                haiend_outputs.append(self.haiend_head(h_out))
 
             if pv_teacher is not None and ss_ratio > 0.0:
                 use_pred = (torch.rand(B, device=x_cv.device) < ss_ratio
@@ -368,11 +388,14 @@ class GRUPlant(nn.Module):
             else:
                 pv = pv_pred                               # pure autoregressive
 
-        return torch.stack(outputs, dim=1)                 # (B, target_len, n_pv)
+        pv_out = torch.stack(pv_outputs, dim=1)            # (B, target_len, n_pv)
+        haiend_out = (torch.stack(haiend_outputs, dim=1)   # (B, target_len, n_haiend)
+                      if haiend_outputs else None)
+        return pv_out, haiend_out
 
     @torch.no_grad()
     def predict(self, x_cv: torch.Tensor, x_cv_target: torch.Tensor,
-                pv_init: torch.Tensor, scenario: torch.Tensor) -> torch.Tensor:
-        """Full autoregressive rollout (no teacher forcing)."""
+                pv_init: torch.Tensor, scenario: torch.Tensor):
+        """Full autoregressive rollout. Returns (pv_out, haiend_out)."""
         self.eval()
         return self.forward(x_cv, x_cv_target, pv_init, scenario)
