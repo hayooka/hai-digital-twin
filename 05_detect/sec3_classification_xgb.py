@@ -35,30 +35,22 @@ sys.path.insert(0, str(ROOT / "03_model"))
 
 from pipeline import load_and_prepare_data
 from gru import GRUPlant, GRUController, CCSequenceModel
-from config import LOOPS, PV_COLS, PROCESSED_DATA_DIR
+from config import LOOPS, PV_COLS
+from shared import SCENARIO_NAMES, CTRL_LOOPS, CTRL_HIDDEN_PER_LOOP, EXTRA_CHANNELS, augment_ctrl_data
 
-DEVICE     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-BATCH      = 128
-CKPT_DIR   = ROOT / "outputs" / "pipeline" / "gru_scenario_weighted"
-OUT_DIR    = ROOT / "report_plots" / "figures"
-STATS_DIR  = ROOT / "report_plots" / "figures" / "s3_experement"
+DEVICE    = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+BATCH     = 128
+CKPT_DIR  = ROOT / "outputs" / "pipeline" / "gru_scenario_weighted"
+OUT_DIR   = ROOT / "report_plots" / "figures"
+STATS_DIR = ROOT / "report_plots" / "figures" / "s3_experement"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 STATS_DIR.mkdir(parents=True, exist_ok=True)
 
-CTRL_LOOPS  = ["PC", "LC", "FC", "TC", "CC"]
-CTRL_H      = {"PC": 64, "LC": 64, "FC": 128, "TC": 64, "CC": 64}
-N_SYNTH     = 3292
-SC_LABELS   = {0: "Normal", 1: "AP_no", 2: "AP_with", 3: "AE_no"}
-SC_COLORS   = {0: "#2196F3", 1: "#FF5722", 2: "#E91E63", 3: "#9C27B0"}
-PV_SHORT    = [c.replace("P1_", "") for c in PV_COLS]
-
-EXTRA_CHANNELS = {
-    "PC": ["P1_PCV02D", "P1_FT01",   "P1_TIT01"],
-    "LC": ["P1_FT03",   "P1_FCV03D", "P1_PCV01D"],
-    "FC": ["P1_PIT01",  "P1_LIT01",  "P1_TIT03"],
-    "TC": ["P1_FT02",   "P1_PIT02",  "P1_TIT02"],
-    "CC": ["P1_PP04D",  "P1_FCV03D", "P1_PCV02D"],
-}
+CTRL_H    = CTRL_HIDDEN_PER_LOOP
+N_SYNTH   = 3292
+SC_LABELS = SCENARIO_NAMES
+SC_COLORS = {0: "#2196F3", 1: "#FF5722", 2: "#E91E63", 3: "#9C27B0"}
+PV_SHORT  = [c.replace("P1_", "") for c in PV_COLS]
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

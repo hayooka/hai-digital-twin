@@ -21,6 +21,7 @@ Run:
     python 03_model/train_gru_causal_plus.py
 """
 
+import logging
 import sys
 import json
 import random
@@ -36,47 +37,47 @@ sys.path.insert(0, str(ROOT / "02_data_pipeline"))
 sys.path.insert(0, str(ROOT / "03_model"))
 sys.path.insert(0, str(ROOT / "04_evaluate"))
 
-import joblib
 from sklearn.metrics import roc_auc_score, f1_score, precision_recall_curve
 from pipeline import load_and_prepare_data
 from gru import GRUPlant, GRUController, CCSequenceModel
-from config import LOOPS, PV_COLS, PROCESSED_DATA_DIR
+from config import LOOPS, PV_COLS
+from shared import SCENARIO_NAMES, CTRL_LOOPS, CTRL_HIDDEN_PER_LOOP, EXTRA_CHANNELS, augment_ctrl_data
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-SEED        = 42
-# Plant
-ATTACK_WEIGHT   = 3.0   # attack windows penalized 3× in plant loss
-TIT03_LOSS_WEIGHT = 2.0   # upweight TIT03 channel (effective 6× on attack windows)
-HIDDEN      = 512
-LAYERS      = 2
-DROPOUT     = 0.05368612920084348
-# Controller — per-loop hidden sizes
-CTRL_HIDDEN_PER_LOOP = {'PC': 64, 'LC': 64, 'FC': 128, 'TC': 64, 'CC': 64}  # FC=128: more capacity for 6 inputs (SP+PV+CV+PIT01+LIT01+TIT03)
-CTRL_LAYERS = 2
-# Three causal layers per loop (L0=sensor→actuator, L1=actuator→sensor direct, L2=2-hop physical)
-EXTRA_CHANNELS = {
-    'PC': ['P1_PCV02D',  'P1_FT01',   'P1_TIT01'],  # L0=press valve2 (PC DCS), L1=flow, L2=temp@HEX
-    'LC': ['P1_FT03',   'P1_FCV03D', 'P1_PCV01D'], # L0=flow in LC block, L1=drain valve, L2=pressure
-    'FC': ['P1_PIT01',  'P1_LIT01',  'P1_TIT03'],  # L0=pressure head, L1=level, L2=temp@TK01
-    'TC': ['P1_FT02',   'P1_PIT02',  'P1_TIT02'],  # L0=flow in TC block, L1=pressure, L2=temp@TK02
-    'CC': ['P1_PP04D',  'P1_FCV03D', 'P1_PCV02D'], # L0=pump digital, L1=drain valve, L2=press valve2
-}
-# Training  (gentle fine-tune LR for warm-start; BATCH=64 for more gradient steps)
-EPOCHS      = 150
-BATCH       = 64
-LR          = 0.001   # low LR to fine-tune warm-started plant without destroying learned weights
-CTRL_LR     = 0.003   # higher: controllers start from random init with 6 inputs, need faster convergence
-WD          = 1e-5
-GRAD_CLIP   = 1.0
-SCH_PAT     = 8       # more patience before LR decay — warm-started model is already near optimum
-SCH_FAC     = 0.5
-PATIENCE    = 25      # allow longer plateau before stopping
-# Scheduled sampling
-SS_START    = 10
-SS_END      = 59
-SS_MAX      = 0.48275479779275443
+SEED = 42
 
-# Warm-start: load plant checkpoint from best previous run
+# Plant loss weights
+ATTACK_WEIGHT     = 3.0   # attack windows penalized 3× in plant loss
+TIT03_LOSS_WEIGHT = 2.0   # upweight TIT03 (cooling PV); effective 6× on attack windows
+
+# Architecture (matched to warm-start checkpoint)
+HIDDEN  = 512
+LAYERS  = 2
+# DROPOUT and SS_MAX were found via Optuna hyperparameter search
+DROPOUT = 0.054
+CTRL_LAYERS = 2
+
+# Training — gentle fine-tune LR; BATCH=64 for more gradient steps
+EPOCHS    = 150
+BATCH     = 64
+LR        = 0.001   # low: fine-tunes warm-started plant without destroying learned weights
+CTRL_LR   = 0.003   # higher: controllers start from scratch with 6 inputs
+WD        = 1e-5
+GRAD_CLIP = 1.0
+SCH_PAT   = 8
+SCH_FAC   = 0.5
+PATIENCE  = 25
+
+# Scheduled sampling (ratio annealed from 0 → SS_MAX over training)
+SS_START = 10
+SS_END   = 59
+SS_MAX   = 0.483   # from Optuna search
+
+# NOTE: The warm-start folder name contains a typo from the original training run.
+# Do NOT rename the folder — it is the actual checkpoint on disk.
 WARMSTART_CKPT = ROOT / "outputs/pipeline/Re__reults_of_gru_after_wight_/gru_plant.pt"
 
 OUT_DIR = ROOT / "outputs/pipeline/gru_causal_plus/gru_causal_plus"
@@ -87,8 +88,7 @@ torch.manual_seed(SEED); torch.cuda.manual_seed_all(SEED)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # ── 1. Load data ──────────────────────────────────────────────────────────────
-print("=" * 60)
-print("Step 1: Loading data via pipeline...")
+log.info("Step 1: Loading data via pipeline...")
 data        = load_and_prepare_data()
 plant_data  = data['plant']
 ctrl_data   = data['ctrl']
@@ -122,44 +122,13 @@ N_PV        = plant_data['n_pv']
 N_SCENARIOS = data['metadata']['n_scenarios']
 N           = len(X_train)
 
-print(f"  n_plant_in  : {N_PLANT_IN}")
-print(f"  n_pv        : {N_PV}")
-print(f"  n_scenarios : {N_SCENARIOS}")
-print(f"  Train       : {X_train.shape}   Val: {X_val.shape}")
+assert N_PV == len(PV_COLS), f"Expected {len(PV_COLS)} PV channels, got {N_PV}"
+_TIT03_IDX = PV_COLS.index('P1_TIT03')   # index of TIT03 in PV_COLS (upweighted channel)
 
-# ── Augment ctrl_data with 3 causal channels per loop ────────────────────────
-def augment_ctrl_data(ctrl_data: dict, sensor_cols: list) -> None:
-    """
-    Append L0/L1/L2 causal channels to each loop's X arrays in-place.
-    Each loop receives 3 extra plant-scaled channels beyond [SP, PV, CV].
-    """
-    plant_scaler = joblib.load(f"{PROCESSED_DATA_DIR}/scaler.pkl")
-    npz_train = np.load(f"{PROCESSED_DATA_DIR}/train_data.npz")
-    npz_val   = np.load(f"{PROCESSED_DATA_DIR}/val_data.npz")
-    npz_test  = np.load(f"{PROCESSED_DATA_DIR}/test_data.npz")
+log.info("n_plant_in=%d  n_pv=%d  n_scenarios=%d  train=%s  val=%s",
+         N_PLANT_IN, N_PV, N_SCENARIOS, X_train.shape, X_val.shape)
 
-    col_idx = {c: i for i, c in enumerate(sensor_cols)}
-
-    for ln, extra_cols in EXTRA_CHANNELS.items():
-        added = []
-        for extra_col in extra_cols:
-            if extra_col not in col_idx:
-                print(f"  WARNING: {extra_col} not found for {ln} — skipping")
-                continue
-            ei      = col_idx[extra_col]
-            mean_e  = plant_scaler.mean_[ei]
-            scale_e = plant_scaler.scale_[ei]
-            for split, npz in [('train', npz_train), ('val', npz_val), ('test', npz_test)]:
-                raw = npz['X'][:, :, [ei]].astype(np.float32)
-                sc  = (raw - mean_e) / scale_e
-                ctrl_data[ln][f'X_{split}'] = np.concatenate(
-                    [ctrl_data[ln][f'X_{split}'], sc], axis=-1)
-            added.append(extra_col)
-        layer_labels = ['L0', 'L1', 'L2'][:len(added)]
-        print(f"  {ln}: added {' + '.join(f'{l}={c}' for l, c in zip(layer_labels, added))}"
-              f"  → n_inputs={ctrl_data[ln]['X_train'].shape[-1]}")
-
-print("\nAugmenting controller data with three causal layers...")
+log.info("Augmenting controller data with three causal layers...")
 augment_ctrl_data(ctrl_data, sensor_cols)
 
 # ── CV column indices in the non-PV feature space (used for closed-loop) ─────
@@ -172,7 +141,7 @@ ctrl_cv_col_idx = {ln: col_to_idx[LOOPS[ln].cv]
                    for ln in CTRL_LOOPS if LOOPS[ln].cv in col_to_idx}
 
 # ── 2. Build models ───────────────────────────────────────────────────────────
-print(f"\nStep 2: Building models... (device: {device})")
+log.info("Step 2: Building models (device: %s)", device)
 
 plant_model = GRUPlant(
     n_plant_in=N_PLANT_IN, n_pv=N_PV,
@@ -195,17 +164,24 @@ for ln in CTRL_LOOPS:
             dropout=DROPOUT, output_len=TARGET_LEN,
         ).to(device)
 
-print(f"  GRUPlant    : {sum(p.numel() for p in plant_model.parameters()):,}")
-print(f"  Controllers : {sum(p.numel() for m in ctrl_models.values() for p in m.parameters()):,}")
+log.info("GRUPlant params: %s", f"{sum(p.numel() for p in plant_model.parameters()):,}")
+log.info("Controller params: %s", f"{sum(p.numel() for m in ctrl_models.values() for p in m.parameters()):,}")
 
 # ── Warm-start plant from best previous checkpoint ────────────────────────────
 if WARMSTART_CKPT.exists():
-    ckpt = torch.load(WARMSTART_CKPT, map_location=device)
-    plant_model.load_state_dict(ckpt["model_state"])
-    print(f"\n  Warm-started plant from: {WARMSTART_CKPT}")
-    print(f"    (checkpoint val_loss={ckpt.get('val_loss', 'N/A')}, epoch={ckpt.get('epoch', 'N/A')})")
+    try:
+        ckpt = torch.load(WARMSTART_CKPT, map_location=device, weights_only=True)
+        missing, unexpected = plant_model.load_state_dict(ckpt["model_state"], strict=False)
+        if missing:
+            log.warning("Warm-start: missing keys: %s", missing)
+        if unexpected:
+            log.warning("Warm-start: unexpected keys: %s", unexpected)
+        log.info("Warm-started plant from %s  (epoch=%s, val_loss=%s)",
+                 WARMSTART_CKPT, ckpt.get('epoch', 'N/A'), ckpt.get('val_loss', 'N/A'))
+    except Exception as exc:
+        log.error("Failed to load warm-start checkpoint: %s — training from scratch", exc)
 else:
-    print(f"\n  WARNING: Warm-start checkpoint not found at {WARMSTART_CKPT} — training from scratch.")
+    log.warning("Warm-start checkpoint not found at %s — training from scratch.", WARMSTART_CKPT)
 
 # ── 3. Optimizers & losses ────────────────────────────────────────────────────
 plant_opt = torch.optim.Adam(plant_model.parameters(), lr=LR, weight_decay=WD)
@@ -216,10 +192,16 @@ ctrl_opts = {ln: torch.optim.Adam(m.parameters(), lr=CTRL_LR, weight_decay=WD)
 mse = nn.MSELoss()
 bce = nn.BCEWithLogitsLoss()
 
-def weighted_mse(pred, target, scenario):
-    # per-channel: upweight TIT03 (last channel), then scale attack windows
-    loss_main  = ((pred[:, :, :4] - target[:, :, :4]) ** 2).mean(dim=(1, 2))
-    loss_tit03 = ((pred[:, :, 4:] - target[:, :, 4:]) ** 2).mean(dim=(1, 2))
+def weighted_mse(pred: torch.Tensor, target: torch.Tensor,
+                 scenario: torch.Tensor) -> torch.Tensor:
+    """Attack-weighted MSE with TIT03 channel upweighting.
+
+    TIT03 (cooling PV) is separated because AE attacks directly manipulate
+    the cooling loop, making TIT03 residuals the earliest attack indicator.
+    """
+    other = [i for i in range(N_PV) if i != _TIT03_IDX]
+    loss_main  = ((pred[:, :, other]        - target[:, :, other])        ** 2).mean(dim=(1, 2))
+    loss_tit03 = ((pred[:, :, [_TIT03_IDX]] - target[:, :, [_TIT03_IDX]]) ** 2).mean(dim=(1, 2))
     loss = loss_main + TIT03_LOSS_WEIGHT * loss_tit03
     weights = torch.where(scenario > 0,
                           torch.full_like(loss, ATTACK_WEIGHT),
@@ -277,7 +259,7 @@ def val_controllers() -> dict:
 
 
 # ── 4. Training loop ──────────────────────────────────────────────────────────
-print(f"\nStep 3: Training for {EPOCHS} epochs (LR={LR}, PATIENCE={PATIENCE})...")
+log.info("Step 3: Training for %d epochs (LR=%s, PATIENCE=%d)", EPOCHS, LR, PATIENCE)
 best_plant_val   = float("inf")
 best_plant_state = plant_model.state_dict()
 patience_counter = 0
@@ -356,17 +338,16 @@ for epoch in range(1, EPOCHS + 1):
     else:
         patience_counter += 1
         if patience_counter >= PATIENCE:
-            print(f"\n  Early stopping at epoch {epoch} (no improvement for {PATIENCE} epochs)")
+            log.info("Early stopping at epoch %d (no improvement for %d epochs)", epoch, PATIENCE)
             break
 
     if epoch % 10 == 0 or epoch == 1:
         ctrl_str = "  ".join(f"{ln}={v:.4f}" for ln, v in ctrl_train.items())
-        print(f"  Epoch {epoch:3d}/{EPOCHS} | plant: train={plant_total/max(1,N//BATCH):.5f}"
-              f"  val={pval:.5f}  ss={ss:.3f}")
-        print(f"             | ctrl:  {ctrl_str}")
+        log.info("Epoch %3d/%d | plant train=%.5f val=%.5f ss=%.3f | ctrl: %s",
+                 epoch, EPOCHS, plant_total / max(1, N // BATCH), pval, ss, ctrl_str)
 
 plant_model.load_state_dict(best_plant_state)
-print(f"\n  Best plant val loss: {best_plant_val:.5f}")
+log.info("Best plant val loss: %.5f", best_plant_val)
 
 # ── Training loss curves ──────────────────────────────────────────────────────
 import matplotlib.pyplot as plt
@@ -378,10 +359,10 @@ ax.set_title("GRU-Causal-Plus — Training Loss"); ax.legend(); ax.grid(alpha=0.
 fig.tight_layout()
 fig.savefig(OUT_DIR / "gru_loss_curves.png", dpi=150, bbox_inches="tight")
 plt.close(fig)
-print(f"  Saved: gru_loss_curves.png")
+log.info("Saved: gru_loss_curves.png")
 
 # ── 5. Closed-loop validation ─────────────────────────────────────────────────
-print(f"\nStep 4: Closed-loop validation ({TARGET_LEN}-step / ~{TARGET_LEN//60}-min horizon)...")
+log.info("Step 4: Closed-loop validation (%d-step / ~%d-min horizon)", TARGET_LEN, TARGET_LEN // 60)
 for m in ctrl_models.values(): m.eval()
 plant_model.eval()
 
@@ -417,13 +398,11 @@ for k in range(N_PV):
     rng    = max(float(true_k.max() - true_k.min()), 1e-6)
     nrmse.append(rmse / rng)
 
-print("  Closed-loop NRMSE per PV:")
 for name, v in zip(PV_COLS, nrmse):
-    print(f"    {name:<30s}: {v:.4f}")
-print(f"  Mean NRMSE: {np.mean(nrmse):.4f}")
+    log.info("  Closed-loop NRMSE  %-30s: %.4f", name, v)
+log.info("  Mean NRMSE: %.4f", np.mean(nrmse))
 
 # ── Controller NRMSE (open-loop, val split) ───────────────────────────────────
-print(f"\n  Controller NRMSE (open-loop val):")
 for m in ctrl_models.values(): m.eval()
 with torch.no_grad():
     for ln in CTRL_LOOPS:
@@ -435,7 +414,7 @@ with torch.no_grad():
             pred = ctrl_models[ln](Xv).cpu().numpy()
         rmse = np.sqrt(np.mean((pred - yv) ** 2))
         rng  = max(float(yv.max() - yv.min()), 1e-6)
-        print(f"    {ln} (CV→{LOOPS[ln].cv:<18s}): NRMSE={rmse/rng:.4f}")
+        log.info("  Controller NRMSE  %s (CV→%-18s): %.4f", ln, LOOPS[ln].cv, rmse / rng)
 
 results = {
     "model": "GRU-Causal-Plus",
@@ -452,10 +431,10 @@ results = {
 }
 with open(OUT_DIR / "results.json", "w") as f:
     json.dump(results, f, indent=2)
-print(f"  Saved: results.json")
+log.info("Saved: results.json")
 
 # ── Test-set evaluation ───────────────────────────────────────────────────────
-print(f"\nStep 5: Test-set evaluation ({len(X_test)} windows)...")
+log.info("Step 5: Test-set evaluation (%d windows)", len(X_test))
 for m in ctrl_models.values(): m.eval()
 plant_model.eval()
 
@@ -489,10 +468,9 @@ for k in range(N_PV):
     rng    = max(float(true_k.max() - true_k.min()), 1e-6)
     nrmse_test.append(rmse / rng)
 
-print("  Test NRMSE (normal windows):")
 for name, v in zip(PV_COLS, nrmse_test):
-    print(f"    {name:<30s}: {v:.4f}")
-print(f"  Test Mean NRMSE: {np.mean(nrmse_test):.4f}")
+    log.info("  Test NRMSE (normal)  %-30s: %.4f", name, v)
+log.info("  Test Mean NRMSE: %.4f", np.mean(nrmse_test))
 
 anomaly_scores = np.mean((pv_preds_te - pv_target_test) ** 2, axis=(1, 2))
 attack_metrics: dict = {}
@@ -514,13 +492,10 @@ if attack_test.sum() > 0:
         "n_attack_windows": int(attack_test.sum()),
         "n_normal_windows": int((attack_test == 0).sum()),
     }
-    print(f"\n  Attack detection (anomaly score = PV reconstruction MSE):")
-    print(f"    AUROC         : {auroc:.4f}")
-    print(f"    Best F1       : {best_f1:.4f}  (threshold={best_thresh:.5f})")
-    print(f"    Avg Precision : {avg_prec:.4f}")
-    print(f"    Attack windows: {attack_metrics['n_attack_windows']} / {N_test}")
+    log.info("Attack detection — AUROC=%.4f  F1=%.4f  AvgPrec=%.4f  (%d/%d attack windows)",
+             auroc, best_f1, avg_prec, attack_metrics['n_attack_windows'], N_test)
 else:
-    print("  WARNING: No attack windows in test set — skipping attack metrics.")
+    log.warning("No attack windows in test set — skipping attack metrics.")
 
 results.update({
     "test_nrmse_per_pv": {name: float(v) for name, v in zip(PV_COLS, nrmse_test)},
@@ -529,10 +504,10 @@ results.update({
 })
 with open(OUT_DIR / "results.json", "w") as f:
     json.dump(results, f, indent=2)
-print(f"  Results updated: results.json")
+log.info("Results updated: results.json")
 
 # ── 6. Save checkpoints ───────────────────────────────────────────────────────
-print(f"\nStep 6: Saving checkpoints to {OUT_DIR}/")
+log.info("Step 6: Saving checkpoints to %s", OUT_DIR)
 
 torch.save({
     "model_state": plant_model.state_dict(),
@@ -542,7 +517,7 @@ torch.save({
     "hidden":      HIDDEN,
     "layers":      LAYERS,
 }, OUT_DIR / "gru_plant.pt")
-print(f"  Saved: gru_plant.pt")
+log.info("Saved: gru_plant.pt")
 
 for ln, m in ctrl_models.items():
     torch.save({
@@ -553,6 +528,6 @@ for ln, m in ctrl_models.items():
         "layers":        CTRL_LAYERS,
         "causal_layers": EXTRA_CHANNELS[ln],
     }, OUT_DIR / f"gru_ctrl_{ln.lower()}.pt")
-    print(f"  Saved: gru_ctrl_{ln.lower()}.pt")
+    log.info("Saved: gru_ctrl_%s.pt", ln.lower())
 
-print("\nDone.")
+log.info("Done.")

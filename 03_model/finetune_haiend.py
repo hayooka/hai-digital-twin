@@ -16,14 +16,18 @@ Run:
     python 03_model/finetune_haiend.py
 """
 
-import sys, json, random
+import logging
+import json
+import random
+import shutil
+import sys
 import numpy as np
 import torch
 import torch.nn as nn
 from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
-import joblib
+import matplotlib.pyplot as plt
 
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "02_data_pipeline"))
@@ -32,7 +36,11 @@ sys.path.insert(0, str(ROOT / "04_evaluate"))
 
 from pipeline import load_and_prepare_data
 from gru import GRUPlant, GRUController, CCSequenceModel
-from config import LOOPS, PV_COLS, HAIEND_COLS, PROCESSED_DATA_DIR
+from config import LOOPS, PV_COLS, HAIEND_COLS
+from shared import CTRL_LOOPS, CTRL_HIDDEN_PER_LOOP, EXTRA_CHANNELS, augment_ctrl_data
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger(__name__)
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 SEED      = 42
@@ -45,17 +53,6 @@ SCH_PAT   = 5
 SCH_FAC   = 0.5
 PATIENCE  = 12
 
-CTRL_HIDDEN_PER_LOOP = {'PC': 64, 'LC': 64, 'FC': 128, 'TC': 64, 'CC': 64}
-CTRL_LOOPS = ['PC', 'LC', 'FC', 'TC', 'CC']
-
-EXTRA_CHANNELS = {
-    'PC': ['P1_PCV02D', 'P1_FT01',   'P1_TIT01'],
-    'LC': ['P1_FT03',   'P1_FCV03D', 'P1_PCV01D'],
-    'FC': ['P1_PIT01',  'P1_LIT01',  'P1_TIT03'],
-    'TC': ['P1_FT02',   'P1_PIT02',  'P1_TIT02'],
-    'CC': ['P1_PP04D',  'P1_FCV03D', 'P1_PCV02D'],
-}
-
 WARMSTART_DIR = ROOT / "outputs/pipeline/gru_scenario_weighted"
 OUT_DIR       = ROOT / "outputs/pipeline/gru_scenario_haiend"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -65,8 +62,7 @@ torch.manual_seed(SEED); torch.cuda.manual_seed_all(SEED)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # ── 1. Load data (all scenarios) ───────────────────────────────────────────────
-print("=" * 60)
-print("Step 1: Loading data (all 4 scenarios)...")
+log.info("Step 1: Loading data (all 4 scenarios)...")
 data        = load_and_prepare_data()
 plant_data  = data['plant']
 ctrl_data   = data['ctrl']
@@ -78,27 +74,10 @@ N_PV        = plant_data['n_pv']
 N_HAIEND    = plant_data['n_haiend']
 N_SCENARIOS = data['metadata']['n_scenarios']
 
-print(f"  Train windows : {len(plant_data['X_train'])}")
-print(f"  Val   windows : {len(plant_data['X_val'])}")
-print(f"  HAIEND channels: {N_HAIEND}")
+log.info("Train windows: %d  Val windows: %d  HAIEND channels: %d",
+         len(plant_data['X_train']), len(plant_data['X_val']), N_HAIEND)
 
-# ── Augment ctrl data ──────────────────────────────────────────────────────────
-def augment_ctrl_data(ctrl_data, sensor_cols):
-    plant_scaler = joblib.load(f"{PROCESSED_DATA_DIR}/scaler.pkl")
-    npz = {s: np.load(f"{PROCESSED_DATA_DIR}/{s}_data.npz")
-           for s in ("train", "val", "test")}
-    col_idx = {c: i for i, c in enumerate(sensor_cols)}
-    for ln, extra_cols in EXTRA_CHANNELS.items():
-        for ec in extra_cols:
-            if ec not in col_idx: continue
-            ei = col_idx[ec]
-            mean_e, scale_e = plant_scaler.mean_[ei], plant_scaler.scale_[ei]
-            for split, arr in npz.items():
-                raw = arr['X'][:, :, [ei]].astype(np.float32)
-                ctrl_data[ln][f'X_{split}'] = np.concatenate(
-                    [ctrl_data[ln][f'X_{split}'], (raw - mean_e) / scale_e], axis=-1)
-
-print("\nAugmenting controller data...")
+log.info("Augmenting controller data...")
 augment_ctrl_data(ctrl_data, sensor_cols)
 
 pv_set      = set(PV_COLS)
@@ -108,8 +87,11 @@ ctrl_cv_col_idx = {ln: col_to_idx[LOOPS[ln].cv]
                    for ln in CTRL_LOOPS if LOOPS[ln].cv in col_to_idx}
 
 # ── 2. Load gru_scenario_weighted + add HAIEND head ───────────────────────────
-print(f"\nStep 2: Loading gru_scenario_weighted checkpoint...")
-ckpt = torch.load(WARMSTART_DIR / "gru_plant.pt", map_location=device)
+log.info("Step 2: Loading gru_scenario_weighted checkpoint...")
+ckpt_path = WARMSTART_DIR / "gru_plant.pt"
+if not ckpt_path.exists():
+    raise FileNotFoundError(f"Warm-start checkpoint not found: {ckpt_path}")
+ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
 hidden = ckpt.get('hidden', 512)
 layers = ckpt.get('layers', 2)
 dropout = ckpt.get('dropout', 0.054)
@@ -123,8 +105,9 @@ plant_model = GRUPlant(
 
 # Load existing weights (strict=False so haiend_head initialises fresh)
 missing, unexpected = plant_model.load_state_dict(ckpt['model_state'], strict=False)
-print(f"  Loaded weights. Missing (new): {missing}")
-print(f"  Unexpected (removed): {unexpected}")
+log.info("Loaded weights. Missing (new): %s", missing)
+if unexpected:
+    log.warning("Unexpected keys (removed from checkpoint): %s", unexpected)
 
 # Freeze everything except haiend_head
 for name, param in plant_model.named_parameters():
@@ -135,7 +118,8 @@ for name, param in plant_model.named_parameters():
 
 trainable = sum(p.numel() for p in plant_model.parameters() if p.requires_grad)
 total     = sum(p.numel() for p in plant_model.parameters())
-print(f"  Trainable params: {trainable:,} / {total:,} (only haiend_head)")
+log.info("Trainable params: %s / %s (only haiend_head)",
+         f"{trainable:,}", f"{total:,}")
 
 # Load controller models (frozen, used only for CV prediction)
 ctrl_models = {}
@@ -152,7 +136,7 @@ for ln in CTRL_LOOPS:
             dropout=0.0, output_len=TARGET_LEN).to(device)
     p = WARMSTART_DIR / f"gru_ctrl_{ln.lower()}.pt"
     if p.exists():
-        c = torch.load(p, map_location=device)
+        c = torch.load(p, map_location=device, weights_only=True)
         ctrl_models[ln].load_state_dict(c['model_state'], strict=False)
     ctrl_models[ln].eval()
     for param in ctrl_models[ln].parameters():
@@ -167,7 +151,7 @@ sch = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, patience=SCH_PAT, factor=S
 mse = nn.MSELoss()
 
 # ── 4. Training loop ───────────────────────────────────────────────────────────
-print(f"\nStep 3: Fine-tuning HAIEND head ({EPOCHS} epochs, PATIENCE={PATIENCE})")
+log.info("Step 3: Fine-tuning HAIEND head (%d epochs, PATIENCE=%d)", EPOCHS, PATIENCE)
 
 X_tr        = plant_data['X_train']
 X_cv_tr     = plant_data['X_cv_target_train']
@@ -257,7 +241,7 @@ for epoch in range(1, EPOCHS + 1):
     history['val'].append(vl_loss)
 
     if epoch % 5 == 0 or epoch == 1:
-        print(f"  Epoch {epoch:3d}/{EPOCHS} | train={tr_loss:.5f}  val={vl_loss:.5f}")
+        log.info("Epoch %3d/%d | train=%.5f  val=%.5f", epoch, EPOCHS, tr_loss, vl_loss)
 
     if vl_loss < best_val:
         best_val   = vl_loss
@@ -266,11 +250,11 @@ for epoch in range(1, EPOCHS + 1):
     else:
         wait += 1
         if wait >= PATIENCE:
-            print(f"  Early stop at epoch {epoch}  (best val={best_val:.5f})")
+            log.info("Early stop at epoch %d  (best val=%.5f)", epoch, best_val)
             break
 
 # ── 5. Save ────────────────────────────────────────────────────────────────────
-print(f"\nStep 4: Saving to {OUT_DIR}/")
+log.info("Step 4: Saving to %s", OUT_DIR)
 plant_model.load_state_dict(best_state)
 
 torch.save({
@@ -281,16 +265,14 @@ torch.save({
     'val_loss':    best_val,
 }, OUT_DIR / "gru_plant.pt")
 
-# Copy controller checkpoints (unchanged)
-import shutil
 for ln in CTRL_LOOPS:
     src = WARMSTART_DIR / f"gru_ctrl_{ln.lower()}.pt"
     if src.exists():
         shutil.copy(src, OUT_DIR / f"gru_ctrl_{ln.lower()}.pt")
-print("  Controller checkpoints copied from gru_scenario_weighted")
+    else:
+        log.warning("Controller checkpoint not found: %s", src)
+log.info("Controller checkpoints copied from gru_scenario_weighted")
 
-# Save loss curves
-import matplotlib.pyplot as plt
 fig, ax = plt.subplots(figsize=(8, 3))
 ax.plot(history['train'], label='Train (HAIEND MSE)')
 ax.plot(history['val'],   label='Val (HAIEND MSE)')
@@ -301,5 +283,5 @@ fig.tight_layout()
 fig.savefig(OUT_DIR / "haiend_loss_curves.png", dpi=150)
 plt.close(fig)
 
-print(f"  Best val HAIEND loss: {best_val:.5f}")
-print("\nDone. Run monitor.py with --ckpt outputs/pipeline/gru_scenario_haiend/gru_plant.pt")
+log.info("Best val HAIEND loss: %.5f", best_val)
+log.info("Done. Run monitor.py with --ckpt outputs/pipeline/gru_scenario_haiend/gru_plant.pt")

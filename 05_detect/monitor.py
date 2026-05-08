@@ -17,7 +17,6 @@ import json
 import numpy as np
 import torch
 import torch.nn as nn
-import joblib
 from pathlib import Path
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
@@ -33,42 +32,14 @@ sys.path.insert(0, str(ROOT / "03_model"))
 
 from pipeline import load_and_prepare_data
 from gru import GRUPlant, GRUController, CCSequenceModel
-from config import LOOPS, PV_COLS, HAIEND_COLS, PROCESSED_DATA_DIR
+from config import LOOPS, PV_COLS, HAIEND_COLS
+from shared import SCENARIO_NAMES, CTRL_LOOPS, CTRL_HIDDEN_PER_LOOP, EXTRA_CHANNELS, augment_ctrl_data
 
-DEVICE    = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-BATCH     = 128
-CTRL_LOOPS = ['PC', 'LC', 'FC', 'TC', 'CC']
-SCENARIO_NAMES = {0: "Normal", 1: "AP_no", 2: "AP_with", 3: "AE_no"}
+DEVICE  = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+BATCH   = 128
 
 OUT_DIR = ROOT / "outputs" / "monitor"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
-
-EXTRA_CHANNELS = {
-    'PC': ['P1_PCV02D', 'P1_FT01',   'P1_TIT01'],
-    'LC': ['P1_FT03',   'P1_FCV03D', 'P1_PCV01D'],
-    'FC': ['P1_PIT01',  'P1_LIT01',  'P1_TIT03'],
-    'TC': ['P1_FT02',   'P1_PIT02',  'P1_TIT02'],
-    'CC': ['P1_PP04D',  'P1_FCV03D', 'P1_PCV02D'],
-}
-
-
-# ── helpers ────────────────────────────────────────────────────────────────────
-
-def augment_ctrl_data(ctrl_data, sensor_cols):
-    plant_scaler = joblib.load(f"{PROCESSED_DATA_DIR}/scaler.pkl")
-    npz = {s: np.load(f"{PROCESSED_DATA_DIR}/{s}_data.npz")
-           for s in ("train", "val", "test")}
-    col_idx = {c: i for i, c in enumerate(sensor_cols)}
-    for ln, extra_cols in EXTRA_CHANNELS.items():
-        for ec in extra_cols:
-            if ec not in col_idx:
-                continue
-            ei = col_idx[ec]
-            mean_e, scale_e = plant_scaler.mean_[ei], plant_scaler.scale_[ei]
-            for split, arr in npz.items():
-                raw = arr['X'][:, :, [ei]].astype(np.float32)
-                ctrl_data[ln][f'X_{split}'] = np.concatenate(
-                    [ctrl_data[ln][f'X_{split}'], (raw - mean_e) / scale_e], axis=-1)
 
 
 def load_models(ckpt_path: Path, data):

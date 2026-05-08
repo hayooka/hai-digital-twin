@@ -19,6 +19,7 @@ Run:
     python 03_model/train_gru_scenario_weighted.py
 """
 
+import logging
 import sys
 import json
 import random
@@ -34,11 +35,14 @@ sys.path.insert(0, str(ROOT / "02_data_pipeline"))
 sys.path.insert(0, str(ROOT / "03_model"))
 sys.path.insert(0, str(ROOT / "04_evaluate"))
 
-import joblib
 from sklearn.metrics import roc_auc_score, f1_score, precision_recall_curve
 from pipeline import load_and_prepare_data
 from gru import GRUPlant, GRUController, CCSequenceModel
-from config import LOOPS, PV_COLS, PROCESSED_DATA_DIR
+from config import LOOPS, PV_COLS
+from shared import SCENARIO_NAMES, CTRL_LOOPS, CTRL_HIDDEN_PER_LOOP, EXTRA_CHANNELS, augment_ctrl_data
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 SEED    = 42
@@ -54,18 +58,8 @@ TIT03_LOSS_WEIGHT = 2.0   # keep TIT03 upweighting from causal_plus
 
 HIDDEN  = 512
 LAYERS  = 2
-DROPOUT = 0.05368612920084348
-
-CTRL_HIDDEN_PER_LOOP = {'PC': 64, 'LC': 64, 'FC': 128, 'TC': 64, 'CC': 64}
+DROPOUT = 0.054   # from Optuna hyperparameter search
 CTRL_LAYERS = 2
-
-EXTRA_CHANNELS = {
-    'PC': ['P1_PCV02D',  'P1_FT01',   'P1_TIT01'],
-    'LC': ['P1_FT03',   'P1_FCV03D', 'P1_PCV01D'],
-    'FC': ['P1_PIT01',  'P1_LIT01',  'P1_TIT03'],
-    'TC': ['P1_FT02',   'P1_PIT02',  'P1_TIT02'],
-    'CC': ['P1_PP04D',  'P1_FCV03D', 'P1_PCV02D'],
-}
 
 # Fine-tune settings (not full retrain)
 EPOCHS    = 100
@@ -95,8 +89,7 @@ torch.manual_seed(SEED); torch.cuda.manual_seed_all(SEED)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # ── 1. Load data ──────────────────────────────────────────────────────────────
-print("=" * 60)
-print("Step 1: Loading data...")
+log.info("Step 1: Loading data...")
 data        = load_and_prepare_data()
 plant_data  = data['plant']
 ctrl_data   = data['ctrl']
@@ -129,43 +122,26 @@ N_PV        = plant_data['n_pv']
 N_SCENARIOS = data['metadata']['n_scenarios']
 N           = len(X_train)
 
-print(f"  Train: {X_train.shape}   Val: {X_val.shape}")
+assert N_PV == len(PV_COLS), f"Expected {len(PV_COLS)} PV channels, got {N_PV}"
+_TIT03_IDX = PV_COLS.index('P1_TIT03')
+
+log.info("Train: %s   Val: %s", X_train.shape, X_val.shape)
 for sc_id, w in SCENARIO_WEIGHTS.items():
     n = (scenario_train == sc_id).sum()
-    print(f"  sc={sc_id}: {n:5d} train windows  weight={w}")
+    log.info("  sc=%d %-10s: %5d train windows  weight=%.1f",
+             sc_id, SCENARIO_NAMES.get(sc_id, '?'), n, w)
 
-# ── Augment ctrl_data ─────────────────────────────────────────────────────────
-def augment_ctrl_data(ctrl_data: dict, sensor_cols: list) -> None:
-    plant_scaler = joblib.load(f"{PROCESSED_DATA_DIR}/scaler.pkl")
-    npz_train = np.load(f"{PROCESSED_DATA_DIR}/train_data.npz")
-    npz_val   = np.load(f"{PROCESSED_DATA_DIR}/val_data.npz")
-    npz_test  = np.load(f"{PROCESSED_DATA_DIR}/test_data.npz")
-    col_idx   = {c: i for i, c in enumerate(sensor_cols)}
-    for ln, extra_cols in EXTRA_CHANNELS.items():
-        for extra_col in extra_cols:
-            if extra_col not in col_idx: continue
-            ei      = col_idx[extra_col]
-            mean_e  = plant_scaler.mean_[ei]
-            scale_e = plant_scaler.scale_[ei]
-            for split, npz in [('train', npz_train), ('val', npz_val), ('test', npz_test)]:
-                raw = npz['X'][:, :, [ei]].astype(np.float32)
-                sc  = (raw - mean_e) / scale_e
-                ctrl_data[ln][f'X_{split}'] = np.concatenate(
-                    [ctrl_data[ln][f'X_{split}'], sc], axis=-1)
-        print(f"  {ln}: → n_inputs={ctrl_data[ln]['X_train'].shape[-1]}")
-
-print("\nAugmenting controller data...")
+log.info("Augmenting controller data...")
 augment_ctrl_data(ctrl_data, sensor_cols)
 
 pv_set      = set(PV_COLS)
 non_pv_cols = [c for c in sensor_cols if c not in pv_set]
 col_to_idx  = {c: i for i, c in enumerate(non_pv_cols)}
-CTRL_LOOPS  = ['PC', 'LC', 'FC', 'TC', 'CC']
 ctrl_cv_col_idx = {ln: col_to_idx[LOOPS[ln].cv]
                    for ln in CTRL_LOOPS if LOOPS[ln].cv in col_to_idx}
 
 # ── 2. Build & load models ────────────────────────────────────────────────────
-print(f"\nStep 2: Loading models... (device: {device})")
+log.info("Step 2: Loading models (device: %s)", device)
 
 plant_model = GRUPlant(
     n_plant_in=N_PLANT_IN, n_pv=N_PV,
@@ -173,12 +149,13 @@ plant_model = GRUPlant(
     n_scenarios=N_SCENARIOS, dropout=DROPOUT,
 ).to(device)
 
-ckpt = torch.load(WARMSTART_CKPT, map_location=device)
+if not WARMSTART_CKPT.exists():
+    raise FileNotFoundError(f"Warm-start checkpoint not found: {WARMSTART_CKPT}")
+ckpt = torch.load(WARMSTART_CKPT, map_location=device, weights_only=True)
 plant_model.load_state_dict(ckpt["model_state"])
-print(f"  Loaded plant from {WARMSTART_CKPT.name}"
-      f"  (epoch={ckpt.get('epoch','?')}, val_loss={ckpt.get('val_loss','?')})")
+log.info("Loaded plant from %s  (epoch=%s, val_loss=%s)",
+         WARMSTART_CKPT.name, ckpt.get('epoch', '?'), ckpt.get('val_loss', '?'))
 
-# Load controllers from causal_plus_added
 ctrl_models = {}
 for ln in CTRL_LOOPS:
     n_in = ctrl_data[ln]['X_train'].shape[-1]
@@ -195,11 +172,11 @@ for ln in CTRL_LOOPS:
             dropout=DROPOUT, output_len=TARGET_LEN,
         ).to(device)
     if ctrl_path.exists():
-        c = torch.load(ctrl_path, map_location=device)
+        c = torch.load(ctrl_path, map_location=device, weights_only=True)
         ctrl_models[ln].load_state_dict(c["model_state"])
-        print(f"  Loaded controller {ln} from {ctrl_path.name}")
+        log.info("Loaded controller %s from %s", ln, ctrl_path.name)
     else:
-        print(f"  WARNING: {ctrl_path.name} not found — random init")
+        log.warning("%s not found — using random init", ctrl_path.name)
 
 # ── 3. Loss & optimizers ──────────────────────────────────────────────────────
 mse = nn.MSELoss()
@@ -214,10 +191,11 @@ sc_weight_tensor = torch.tensor(
 def weighted_mse(pred: torch.Tensor, target: torch.Tensor,
                  scenario: torch.Tensor) -> torch.Tensor:
     """Per-scenario weighted MSE with TIT03 channel upweighting."""
-    loss_main  = ((pred[:, :, :4] - target[:, :, :4]) ** 2).mean(dim=(1, 2))
-    loss_tit03 = ((pred[:, :, 4:] - target[:, :, 4:]) ** 2).mean(dim=(1, 2))
+    other = [i for i in range(N_PV) if i != _TIT03_IDX]
+    loss_main  = ((pred[:, :, other]        - target[:, :, other])        ** 2).mean(dim=(1, 2))
+    loss_tit03 = ((pred[:, :, [_TIT03_IDX]] - target[:, :, [_TIT03_IDX]]) ** 2).mean(dim=(1, 2))
     loss    = loss_main + TIT03_LOSS_WEIGHT * loss_tit03
-    weights = sc_weight_tensor[scenario]   # (B,) — per-sample scenario weight
+    weights = sc_weight_tensor[scenario]
     return (loss * weights).mean()
 
 def ss_ratio_for(epoch: int) -> float:
@@ -268,8 +246,8 @@ def val_controllers() -> dict:
     return losses
 
 # ── 4. Training loop ──────────────────────────────────────────────────────────
-print(f"\nStep 3: Fine-tuning {EPOCHS} epochs  LR={LR}  PATIENCE={PATIENCE}")
-print(f"  Scenario weights: {SCENARIO_WEIGHTS}")
+log.info("Step 3: Fine-tuning %d epochs  LR=%s  PATIENCE=%d", EPOCHS, LR, PATIENCE)
+log.info("Scenario weights: %s", SCENARIO_WEIGHTS)
 
 best_val   = float("inf")
 best_state = {k: v.clone() for k, v in plant_model.state_dict().items()}
@@ -335,15 +313,15 @@ for epoch in range(1, EPOCHS + 1):
     else:
         patience_ctr += 1
         if patience_ctr >= PATIENCE:
-            print(f"  Early stopping at epoch {epoch}")
+            log.info("Early stopping at epoch %d", epoch)
             break
 
     if epoch % 10 == 0 or epoch == 1:
-        print(f"  Epoch {epoch:3d}/{EPOCHS} | train={total/max(1,N//BATCH):.5f}"
-              f"  val={pval:.5f}  ss={ss:.3f}")
+        log.info("Epoch %3d/%d | train=%.5f  val=%.5f  ss=%.3f",
+                 epoch, EPOCHS, total / max(1, N // BATCH), pval, ss)
 
 plant_model.load_state_dict(best_state)
-print(f"\n  Best val loss: {best_val:.5f}")
+log.info("Best val loss: %.5f", best_val)
 
 # ── Training loss curves ──────────────────────────────────────────────────────
 import matplotlib.pyplot as plt
@@ -355,10 +333,10 @@ ax.set_title("GRU-Scenario-Weighted — Training Loss"); ax.legend(); ax.grid(al
 fig.tight_layout()
 fig.savefig(OUT_DIR / "gru_loss_curves.png", dpi=150, bbox_inches="tight")
 plt.close(fig)
-print(f"  Saved: gru_loss_curves.png")
+log.info("Saved: gru_loss_curves.png")
 
 # ── 5. Test evaluation ────────────────────────────────────────────────────────
-print(f"\nStep 4: Test-set evaluation ({len(X_test)} windows)...")
+log.info("Step 4: Test-set evaluation (%d windows)", len(X_test))
 for m in ctrl_models.values(): m.eval()
 plant_model.eval()
 
@@ -380,11 +358,9 @@ with torch.no_grad():
         pv_seq, _ = plant_model.predict(x_cv_b, xct_b, pv_init_b, sc_b)
         pv_preds_te[i:i + pv_seq.size(0)] = pv_seq.cpu().numpy()
 
-SCENARIO_SHORT = {0: "Normal", 1: "AP_no", 2: "AP_with", 3: "AE_no"}
-
-print("\n  Per-scenario NRMSE (test):")
+log.info("Per-scenario NRMSE (test):")
 scenario_nrmse = {}
-for sc_id, sc_name in SCENARIO_SHORT.items():
+for sc_id, sc_name in SCENARIO_NAMES.items():
     mask = (scenario_test == sc_id)
     if mask.sum() == 0: continue
     sc_nrmse = []
@@ -395,7 +371,8 @@ for sc_id, sc_name in SCENARIO_SHORT.items():
         rng    = max(float(true_k.max() - true_k.min()), 1e-6)
         sc_nrmse.append(rmse / rng)
     scenario_nrmse[sc_name] = sc_nrmse
-    print(f"    {sc_name:<10}: {' '.join(f'{v:.4f}' for v in sc_nrmse)}  mean={np.mean(sc_nrmse):.4f}")
+    log.info("  %-10s: %s  mean=%.4f", sc_name,
+             ' '.join(f'{v:.4f}' for v in sc_nrmse), np.mean(sc_nrmse))
 
 normal_mask = (attack_test == 0)
 nrmse_test  = []
@@ -406,9 +383,9 @@ for k in range(N_PV):
     rng    = max(float(true_k.max() - true_k.min()), 1e-6)
     nrmse_test.append(rmse / rng)
 
-print(f"\n  Test NRMSE (normal): mean={np.mean(nrmse_test):.4f}")
+log.info("Test NRMSE (normal): mean=%.4f", np.mean(nrmse_test))
 for name, v in zip(PV_COLS, nrmse_test):
-    print(f"    {name:<30s}: {v:.4f}")
+    log.info("  %-30s: %.4f", name, v)
 
 anomaly_scores = np.mean((pv_preds_te - pv_target_test) ** 2, axis=(1, 2))
 attack_metrics = {}
@@ -428,7 +405,7 @@ if attack_test.sum() > 0:
         "n_attack_windows": int(attack_test.sum()),
         "n_normal_windows": int((attack_test == 0).sum()),
     }
-    print(f"\n  Attack detection: AUROC={auroc:.4f}  F1={best_f1:.4f}")
+    log.info("Attack detection: AUROC=%.4f  F1=%.4f", auroc, best_f1)
 
 results = {
     "model": "GRU-Scenario-Weighted",
@@ -452,10 +429,10 @@ results = {
 }
 with open(OUT_DIR / "results.json", "w") as f:
     json.dump(results, f, indent=2)
-print(f"  Results saved: results.json")
+log.info("Results saved: results.json")
 
 # ── 6. Save checkpoints ───────────────────────────────────────────────────────
-print(f"\nStep 5: Saving to {OUT_DIR}/")
+log.info("Step 5: Saving to %s", OUT_DIR)
 for ln, m in ctrl_models.items():
     torch.save({
         "model_state":   m.state_dict(),
@@ -465,6 +442,6 @@ for ln, m in ctrl_models.items():
         "layers":        CTRL_LAYERS,
         "causal_layers": EXTRA_CHANNELS[ln],
     }, OUT_DIR / f"gru_ctrl_{ln.lower()}.pt")
-    print(f"  Saved: gru_ctrl_{ln.lower()}.pt")
+    log.info("Saved: gru_ctrl_%s.pt", ln.lower())
 
-print("\nDone.")
+log.info("Done.")

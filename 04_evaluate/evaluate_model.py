@@ -28,12 +28,11 @@ sys.path.insert(0, str(ROOT / "03_model"))
 from pipeline import load_and_prepare_data
 from gru import GRUPlant
 from config import PV_COLS
+from shared import SCENARIO_NAMES
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-BATCH  = 128
-
-SCENARIO_NAMES = {0: "Normal", 1: "AP_no", 2: "AP_with", 3: "AE_no"}
-PV_SHORT       = [p.replace("P1_", "") for p in PV_COLS]
+DEVICE   = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+BATCH    = 128
+PV_SHORT = [p.replace("P1_", "") for p in PV_COLS]
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -51,7 +50,10 @@ def mae(true: np.ndarray, pred: np.ndarray) -> float:
 
 
 def load_model(ckpt_dir: Path) -> GRUPlant:
-    ckpt = torch.load(ckpt_dir / "gru_plant.pt", map_location=DEVICE)
+    ckpt_path = ckpt_dir / "gru_plant.pt"
+    if not ckpt_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+    ckpt = torch.load(ckpt_path, map_location=DEVICE, weights_only=True)
     ms   = ckpt["model_state"]
     emb  = ms["scenario_emb.weight"].shape[1]
     model = GRUPlant(

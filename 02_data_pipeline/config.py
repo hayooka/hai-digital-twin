@@ -3,8 +3,11 @@ Configuration file for the HAI Digital Twin
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import os
+
+_ROOT = Path(__file__).parent.parent
 
 # ============================================================
 # Loop Definitions
@@ -153,17 +156,12 @@ CONFIG = ModelConfig()
 # Paths
 # ============================================================
 
-PROCESSED_DATA_DIR = './outputs/scaled_split/'  # Output from episodic data loader
-MODELS_DIR = './models/'
-RESULTS_DIR = './results/'
-FIGURES_DIR = './figures/'
+PROCESSED_DATA_DIR = str(_ROOT / "outputs" / "scaled_split")
+MODELS_DIR  = str(_ROOT / "models")
+RESULTS_DIR = str(_ROOT / "results")
+FIGURES_DIR = str(_ROOT / "figures")
 
-# Create directories
 os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
-os.makedirs(MODELS_DIR, exist_ok=True)
+os.makedirs(MODELS_DIR,  exist_ok=True)
 os.makedirs(RESULTS_DIR, exist_ok=True)
 os.makedirs(FIGURES_DIR, exist_ok=True)
-
-print("✅ Config loaded successfully!")
-print(f"   N_SCENARIOS: {N_SCENARIOS}")
-print(f"   SCENARIO_MAPPING: {SCENARIO_MAPPING}")

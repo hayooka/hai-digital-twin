@@ -26,10 +26,10 @@ ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT / "02_data_pipeline"))
 sys.path.insert(0, str(ROOT / "03_model"))
 
-import joblib
 from pipeline import load_and_prepare_data
 from gru import GRUController, CCSequenceModel
-from config import LOOPS, PROCESSED_DATA_DIR
+from config import LOOPS
+from shared import SCENARIO_NAMES, CTRL_LOOPS, CTRL_HIDDEN_PER_LOOP, augment_ctrl_data
 
 DEVICE     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BATCH      = 128
@@ -37,40 +37,11 @@ CKPT_DIR   = ROOT / "outputs" / "pipeline" / "gru_scenario_weighted"
 OUT_DIR    = ROOT / "report_plots" / "figures"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-CTRL_LOOPS  = ["PC", "LC", "FC", "TC", "CC"]
-CTRL_H      = {"PC": 64, "LC": 64, "FC": 128, "TC": 64, "CC": 64}
-
-# Extra causal channels added to each controller's input during training
-EXTRA_CHANNELS = {
-    "PC": ["P1_PCV02D", "P1_FT01",   "P1_TIT01"],
-    "LC": ["P1_FT03",   "P1_FCV03D", "P1_PCV01D"],
-    "FC": ["P1_PIT01",  "P1_LIT01",  "P1_TIT03"],
-    "TC": ["P1_FT02",   "P1_PIT02",  "P1_TIT02"],
-    "CC": ["P1_PP04D",  "P1_FCV03D", "P1_PCV02D"],
-}
+CTRL_H      = CTRL_HIDDEN_PER_LOOP
 LOOP_COLORS = {"PC": "#2196F3", "LC": "#4CAF50", "FC": "#FF9800", "TC": "#E91E63", "CC": "#9C27B0"}
+SCENARIOS   = SCENARIO_NAMES
+SC_COLORS   = {0: "#2196F3", 1: "#FF5722", 2: "#E91E63", 3: "#9C27B0"}
 
-SCENARIOS     = {0: "Normal", 1: "AP_no", 2: "AP_with", 3: "AE_no"}
-SC_COLORS     = {0: "#2196F3", 1: "#FF5722", 2: "#E91E63", 3: "#9C27B0"}
-
-
-# ── augment controller inputs with causal channels (mirrors training setup) ───
-
-def augment_ctrl_data(ctrl_data, sensor_cols):
-    scaler  = joblib.load(f"{PROCESSED_DATA_DIR}/scaler.pkl")
-    col_idx = {c: i for i, c in enumerate(sensor_cols)}
-    for ln, extra_cols in EXTRA_CHANNELS.items():
-        for ec in extra_cols:
-            if ec not in col_idx:
-                continue
-            ei = col_idx[ec]
-            mean_e, scale_e = scaler.mean_[ei], scaler.scale_[ei]
-            for split in ("train", "val", "test"):
-                npz = np.load(f"{PROCESSED_DATA_DIR}/{split}_data.npz")
-                raw = npz["X"][:, :, [ei]].astype(np.float32)
-                ctrl_data[ln][f"X_{split}"] = np.concatenate(
-                    [ctrl_data[ln][f"X_{split}"], (raw - mean_e) / scale_e], axis=-1)
-    return ctrl_data
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

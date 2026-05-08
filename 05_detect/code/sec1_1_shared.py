@@ -28,6 +28,7 @@ sys.path.insert(0, str(ROOT / "03_model"))
 from pipeline import load_and_prepare_data
 from gru import GRUPlant
 from config import PV_COLS, LOOPS
+from shared import SCENARIO_NAMES, CTRL_LOOPS
 
 DEVICE   = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BATCH    = 128
@@ -35,15 +36,12 @@ CKPT_DIR = ROOT / "outputs" / "pipeline" / "gru_scenario_weighted"
 OUT_DIR  = ROOT / "report_plots" / "figures"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-PV_SHORT       = [p.replace("P1_", "") for p in PV_COLS]
-SCENARIO_NAMES = {0: "Normal", 1: "AP\_no", 2: "AP\_with", 3: "AE\_no"}
-SC_COLORS      = {0: "#2196F3", 1: "#FF5722", 2: "#E91E63", 3: "#9C27B0"}
-
-CTRL_LOOPS = ["PC", "LC", "FC", "TC", "CC"]
+PV_SHORT  = [p.replace("P1_", "") for p in PV_COLS]
+SC_COLORS = {0: "#2196F3", 1: "#FF5722", 2: "#E91E63", 3: "#9C27B0"}
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-def _nrmse(t, p):
+def _nrmse(t: np.ndarray, p: np.ndarray) -> float:
     rmse = np.sqrt(np.mean((t - p) ** 2))
     r    = float(t.max() - t.min())
     return 0.0 if r < 1e-10 else rmse / r

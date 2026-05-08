@@ -28,30 +28,51 @@ sys.path.insert(0, str(ROOT / "02_data_pipeline"))
 sys.path.insert(0, str(ROOT / "03_model"))
 sys.path.insert(0, str(ROOT / "04_evaluate"))
 
-from config import LOOPS, PV_COLS
+from config import LOOPS, PV_COLS, ModelConfig
+from shared import SCENARIO_NAMES, CTRL_LOOPS
 from sklearn.metrics import roc_curve, auc, precision_recall_curve, average_precision_score
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 
-CTRL_LOOPS = ["PC", "LC", "FC", "TC", "CC"]
-SCENARIO_SHORT = {0: "Normal", 1: "AP_no", 2: "AP_with", 3: "AE_no"}
-SCENARIO_NAMES = {0: "Normal", 1: "AP_no", 2: "AP_with", 3: "AE_no"}
+SCENARIO_SHORT = SCENARIO_NAMES   # alias kept for backward compatibility
 PV_SHORT = [c.replace("P1_", "") for c in PV_COLS]
 
-# Map PV to control loop
 PV_TO_LOOP = {
-    "P1_PIT01": "PC",  # Pressure
-    "P1_LIT01": "LC",  # Level
-    "P1_FT03Z": "FC",  # Flow
-    "P1_TIT01": "TC",  # Temperature
-    "P1_TIT03": "CC",  # Cooling
+    "P1_PIT01": "PC",
+    "P1_LIT01": "LC",
+    "P1_FT03Z": "FC",
+    "P1_TIT01": "TC",
+    "P1_TIT03": "CC",
 }
 
-TARGET_LEN = 180
-NRMSE_THRESHOLD = 0.10
+_cfg = ModelConfig()
+TARGET_LEN      = _cfg.seq_len    # fallback; overridden at runtime from data metadata
+NRMSE_THRESHOLD = _cfg.nrmse_threshold
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Global cache for chained rollout
-_CHAIN_CACHE = {}
+
+class _ChainCache:
+    """Thread-unsafe cache for autoregressive chain rollouts.
+
+    Keyed by (split, horizon). Call clear() between experiments to avoid stale data.
+    """
+
+    def __init__(self):
+        self._store: Dict = {}
+
+    def get(self, key):
+        return self._store.get(key)
+
+    def set(self, key, value):
+        self._store[key] = value
+
+    def clear(self):
+        self._store.clear()
+
+    def __contains__(self, key):
+        return key in self._store
+
+
+chain_cache = _ChainCache()
 
 
 # ── Helper Functions ────────────────────────────────────────────────────────────────
@@ -217,9 +238,9 @@ def get_chained_rollout(
     """
     cache_key = f"{split}_{max_windows}"
     
-    if not force_recompute and cache_key in _CHAIN_CACHE:
+    if not force_recompute and cache_key in chain_cache:
         logger.info("Using cached chained rollout")
-        return _CHAIN_CACHE[cache_key]
+        return chain_cache.get(cache_key)
     
     # Get a representative start window (median-variance normal window)
     scenario_labels = data["plant"]["scenario_val"] if split == "val" else data["plant"]["scenario_test"]
@@ -244,7 +265,7 @@ def get_chained_rollout(
     
     logger.info(f"Chained rollout complete: {len(true_chain)} steps, shape: {true_chain.shape}")
     
-    _CHAIN_CACHE[cache_key] = (true_chain, pred_chain)
+    chain_cache.set(cache_key, (true_chain, pred_chain))
     return true_chain, pred_chain
 
 
@@ -958,9 +979,7 @@ def generate_all_paper_plots(
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     
-    # Clear cache before generating to ensure fresh data
-    global _CHAIN_CACHE
-    _CHAIN_CACHE.clear()
+    chain_cache.clear()
     
     # Plot 1: Loss curves
     print("\n[Plot 1] Loss curves...")

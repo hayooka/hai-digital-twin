@@ -32,25 +32,16 @@ sys.path.insert(0, str(ROOT / "03_model"))
 
 from pipeline import load_and_prepare_data
 from gru import GRUPlant, GRUController, CCSequenceModel
-from config import LOOPS, PV_COLS, HAIEND_COLS, PROCESSED_DATA_DIR
+from config import LOOPS, PV_COLS, HAIEND_COLS
+from shared import SCENARIO_NAMES, CTRL_LOOPS, CTRL_HIDDEN_PER_LOOP, EXTRA_CHANNELS, augment_ctrl_data
 
-DEVICE     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-BATCH      = 128
-CTRL_LOOPS = ['PC', 'LC', 'FC', 'TC', 'CC']
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+BATCH  = 128
 
-SCENARIO_NAMES  = {0: "Normal", 1: "AP_no", 2: "AP_with", 3: "AE_no"}
 SCENARIO_COLORS = {0: "#2196F3", 1: "#FF5722", 2: "#E91E63", 3: "#9C27B0"}
 
 OUT_DIR = ROOT / "outputs" / "evaluate_generation"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
-
-EXTRA_CHANNELS = {
-    'PC': ['P1_PCV02D', 'P1_FT01',   'P1_TIT01'],
-    'LC': ['P1_FT03',   'P1_FCV03D', 'P1_PCV01D'],
-    'FC': ['P1_PIT01',  'P1_LIT01',  'P1_TIT03'],
-    'TC': ['P1_FT02',   'P1_PIT02',  'P1_TIT02'],
-    'CC': ['P1_PP04D',  'P1_FCV03D', 'P1_PCV02D'],
-}
 
 
 # ── Feature extraction ─────────────────────────────────────────────────────────

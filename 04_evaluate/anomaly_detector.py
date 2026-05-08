@@ -18,6 +18,7 @@ Outputs:
   prints a summary table to stdout
 """
 
+import logging
 import sys
 import json
 import numpy as np
@@ -25,7 +26,6 @@ import torch
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import joblib
 from pathlib import Path
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import (
@@ -40,41 +40,17 @@ sys.path.insert(0, str(ROOT / "04_evaluate"))
 
 from pipeline import load_and_prepare_data
 from gru import GRUPlant, GRUController, CCSequenceModel
-from config import LOOPS, PV_COLS, PROCESSED_DATA_DIR
-from plot_utils import CTRL_LOOPS
+from config import LOOPS, PV_COLS
+from shared import CTRL_LOOPS, augment_ctrl_data
 
-EXTRA_CHANNELS = {
-    'PC': ['P1_PCV02D', 'P1_FT01',   'P1_TIT01'],
-    'LC': ['P1_FT03',   'P1_FCV03D', 'P1_PCV01D'],
-    'FC': ['P1_PIT01',  'P1_LIT01',  'P1_TIT03'],
-    'TC': ['P1_FT02',   'P1_PIT02',  'P1_TIT02'],
-    'CC': ['P1_PP04D',  'P1_FCV03D', 'P1_PCV02D'],
-}
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger(__name__)
 
 CKPT_DIR = ROOT / "outputs" / "pipeline" / "gru_scenario_weighted"
 OUT_DIR  = ROOT / "plots" / "anomaly_detector"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 DEVICE   = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BATCH    = 128
-
-
-# ── helpers ────────────────────────────────────────────────────────────────────
-
-def augment_ctrl_data(ctrl_data, sensor_cols):
-    plant_scaler = joblib.load(f"{PROCESSED_DATA_DIR}/scaler.pkl")
-    npz = {s: np.load(f"{PROCESSED_DATA_DIR}/{s}_data.npz")
-           for s in ("train", "val", "test")}
-    col_idx = {c: i for i, c in enumerate(sensor_cols)}
-    for ln, extra_cols in EXTRA_CHANNELS.items():
-        for ec in extra_cols:
-            if ec not in col_idx:
-                continue
-            ei = col_idx[ec]
-            mean_e, scale_e = plant_scaler.mean_[ei], plant_scaler.scale_[ei]
-            for split, arr in npz.items():
-                raw = arr['X'][:, :, [ei]].astype(np.float32)
-                ctrl_data[ln][f'X_{split}'] = np.concatenate(
-                    [ctrl_data[ln][f'X_{split}'], (raw - mean_e) / scale_e], axis=-1)
 
 
 def run_inference(plant_model, ctrl_models, ctrl_cv_col_idx,
@@ -126,7 +102,7 @@ def plot_roc(fpr, tpr, roc_auc, label, color, fname):
 
 # ── load data & models ─────────────────────────────────────────────────────────
 
-print("Loading data...")
+log.info("Loading data...")
 data        = load_and_prepare_data()
 plant_data  = data["plant"]
 ctrl_data   = data["ctrl"]
@@ -136,14 +112,13 @@ N_PV        = plant_data["n_pv"]
 
 augment_ctrl_data(ctrl_data, sensor_cols)
 
-from config import PV_COLS as _PV_COLS
-pv_set      = set(_PV_COLS)
+pv_set      = set(PV_COLS)
 non_pv_cols = [c for c in sensor_cols if c not in pv_set]
 col_to_idx  = {c: i for i, c in enumerate(non_pv_cols)}
 ctrl_cv_col_idx = {ln: col_to_idx[LOOPS[ln].cv]
                    for ln in CTRL_LOOPS if LOOPS[ln].cv in col_to_idx}
 
-print("Loading model checkpoints...")
+log.info("Loading model checkpoints...")
 ckpt = torch.load(CKPT_DIR / "gru_plant.pt", map_location=DEVICE)
 _has_heads = any("fc_heads" in k for k in ckpt["model_state"])
 plant_model = GRUPlant(

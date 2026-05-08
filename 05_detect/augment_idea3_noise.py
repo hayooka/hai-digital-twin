@@ -16,7 +16,6 @@ import sys
 import argparse
 import numpy as np
 import torch
-import joblib
 from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
@@ -31,23 +30,14 @@ sys.path.insert(0, str(ROOT / "03_model"))
 
 from pipeline import load_and_prepare_data
 from gru import GRUPlant, GRUController, CCSequenceModel
-from config import LOOPS, PV_COLS, PROCESSED_DATA_DIR
+from config import LOOPS, PV_COLS
+from shared import SCENARIO_NAMES, CTRL_LOOPS, CTRL_HIDDEN_PER_LOOP, EXTRA_CHANNELS, augment_ctrl_data
 
-DEVICE     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-BATCH      = 128
-CTRL_LOOPS = ['PC', 'LC', 'FC', 'TC', 'CC']
-SCENARIO_NAMES  = {0: "Normal", 1: "AP_no", 2: "AP_with", 3: "AE_no"}
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+BATCH  = 128
 SCENARIO_COLORS = {0: "#2196F3", 1: "#FF5722", 2: "#E91E63", 3: "#9C27B0"}
 OUT_DIR = ROOT / "outputs" / "augment_idea3_noise"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
-
-EXTRA_CHANNELS = {
-    'PC': ['P1_PCV02D', 'P1_FT01',   'P1_TIT01'],
-    'LC': ['P1_FT03',   'P1_FCV03D', 'P1_PCV01D'],
-    'FC': ['P1_PIT01',  'P1_LIT01',  'P1_TIT03'],
-    'TC': ['P1_FT02',   'P1_PIT02',  'P1_TIT02'],
-    'CC': ['P1_PP04D',  'P1_FCV03D', 'P1_PCV02D'],
-}
 
 
 def load_models(ckpt_path, data):
@@ -125,7 +115,7 @@ def run_clf(Xtr, ytr, Xte, yte, label):
     return f1_score(yte, yp, average='macro', zero_division=0)
 
 
-def main(ckpt_path, n_variants, noise_std):
+def main(ckpt_path, n_variants, noise_std, seed: int = 42):
     print("=" * 60)
     print("Idea 3 — AE Augmentation via Noise Injection")
     print(f"  n_variants={n_variants}  noise_std={noise_std}")
@@ -137,20 +127,7 @@ def main(ckpt_path, n_variants, noise_std):
     sensor_cols = data['metadata']['sensor_cols']
     TARGET_LEN  = data['metadata']['target_len']
 
-    # augment ctrl
-    ps  = joblib.load(f"{PROCESSED_DATA_DIR}/scaler.pkl")
-    npz = {s: np.load(f"{PROCESSED_DATA_DIR}/{s}_data.npz")
-           for s in ("train", "val", "test")}
-    ci  = {c: i for i, c in enumerate(sensor_cols)}
-    for ln, ec_list in EXTRA_CHANNELS.items():
-        for ec in ec_list:
-            if ec not in ci: continue
-            ei = ci[ec]
-            me, se = ps.mean_[ei], ps.scale_[ei]
-            for sp, arr in npz.items():
-                raw = arr['X'][:, :, [ei]].astype(np.float32)
-                ctrl_data[ln][f'X_{sp}'] = np.concatenate(
-                    [ctrl_data[ln][f'X_{sp}'], (raw - me) / se], axis=-1)
+    augment_ctrl_data(ctrl_data, sensor_cols)
 
     pv_set = set(PV_COLS)
     npc    = [c for c in sensor_cols if c not in pv_set]
@@ -162,6 +139,9 @@ def main(ckpt_path, n_variants, noise_std):
 
     # ── Real AE seeds (6 windows) ──────────────────────────────────────────────
     ae_mask = np.where(plant_data['scenario_test'] == 3)[0]
+    if len(ae_mask) == 0:
+        raise ValueError("No AE_no windows found in test set — cannot augment.")
+
     print(f"\n  Real AE_no seeds: {len(ae_mask)} windows")
 
     X_ae    = plant_data['X_test'][ae_mask]
@@ -172,7 +152,7 @@ def main(ckpt_path, n_variants, noise_std):
     # ── Noise injection → n_variants copies per seed ──────────────────────────
     print(f"  Creating {len(ae_mask)} × {n_variants} = "
           f"{len(ae_mask)*n_variants} noisy variants...")
-    np.random.seed(42)
+    np.random.seed(seed)
 
     X_aug   = np.concatenate([X_ae + np.random.normal(0, noise_std, X_ae.shape)
                                for _ in range(n_variants)], axis=0)
@@ -270,5 +250,6 @@ if __name__ == "__main__":
                         default="outputs/pipeline/gru_scenario_haiend/gru_plant.pt")
     parser.add_argument("--n_variants", type=int, default=50)
     parser.add_argument("--noise_std",  type=float, default=0.01)
+    parser.add_argument("--seed",       type=int,   default=42)
     args = parser.parse_args()
-    main(ROOT / args.ckpt, args.n_variants, args.noise_std)
+    main(ROOT / args.ckpt, args.n_variants, args.noise_std, args.seed)
