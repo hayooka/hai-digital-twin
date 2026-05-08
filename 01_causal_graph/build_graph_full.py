@@ -30,9 +30,10 @@ from pathlib import Path
 import numpy as np
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-BOILER_DIR = Path("C:/Users/ahmma/Desktop/farah/boiler")
-DATA_DIR   = Path("data/processed")
-OUT_DIR    = Path("outputs/causal_graph")
+_ROOT      = Path(__file__).parent.parent
+BOILER_DIR = _ROOT / "boiler"
+DATA_DIR   = _ROOT / "00_data" / "processed"
+OUT_DIR    = _ROOT / "outputs" / "causal_graph"
 
 TRAIN_CSVS  = [DATA_DIR / f"train{i}.csv" for i in range(1, 5)]
 TDMI_SAMPLE = 200_000  # rows to sample for TDMI (more data → better MI)

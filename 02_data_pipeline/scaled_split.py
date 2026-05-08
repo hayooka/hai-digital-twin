@@ -33,6 +33,7 @@ Test Sets (truly unseen):
 
 from __future__ import annotations
 import os
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import joblib
@@ -41,8 +42,9 @@ from sklearn.model_selection import train_test_split
 from typing import List, Dict, Tuple, Optional
 from config import LOOPS
 
-PROCESSED_DIR      = "data/processed"
-OUTPUT_DIR         = "outputs/scaled_split"
+_ROOT              = Path(__file__).parent.parent
+PROCESSED_DIR      = str(_ROOT / "00_data" / "processed")
+OUTPUT_DIR         = str(_ROOT / "outputs" / "scaled_split")
 TRAIN3_RATIO       = 0.30          # First 30% of train3 goes to train, 70% to validation
 ATTACK_SPLIT_RATIO = 0.80          # 80% attacks to train, 20% to test
 BEFORE_ATTACK_SEC  = 300

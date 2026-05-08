@@ -157,11 +157,5 @@ CONFIG = ModelConfig()
 # ============================================================
 
 PROCESSED_DATA_DIR = str(_ROOT / "outputs" / "scaled_split")
-MODELS_DIR  = str(_ROOT / "models")
-RESULTS_DIR = str(_ROOT / "results")
-FIGURES_DIR = str(_ROOT / "figures")
 
 os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
-os.makedirs(MODELS_DIR,  exist_ok=True)
-os.makedirs(RESULTS_DIR, exist_ok=True)
-os.makedirs(FIGURES_DIR, exist_ok=True)

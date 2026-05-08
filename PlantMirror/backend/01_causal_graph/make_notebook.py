@@ -19,7 +19,7 @@ c1 = code([
     "import matplotlib.pyplot as plt",
     "import networkx as nx",
     "",
-    'BOILER_DIR  = Path("C:/Users/ahmma/Desktop/farah/boiler")',
+    'BOILER_DIR  = Path(__file__).parent.parent.parent / "boiler"',
     '# Resolve repo root regardless of CWD (notebook may run from 01_causal_graph/ or repo root)',
     '_cwd = Path().resolve()',
     'ROOT = _cwd if (_cwd / "data/processed").exists() else _cwd.parent',

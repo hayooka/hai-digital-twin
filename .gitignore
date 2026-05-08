@@ -1,18 +1,21 @@
 # Data files — never commit raw/processed data
-data/raw/
-data/processed/
-data/splits/
+00_data/
 *.csv
 *.parquet
 *.h5
 *.hdf5
-*.pkl
-*.pickle
 
 # Large binary arrays
 *.npy
 *.npz
 *.zip
+
+# Serialised objects — exclude by default, but allow specific artifacts
+*.pkl
+*.pickle
+# Allow the saved classifier and scaler so new clones have them out of the box
+!outputs/classifiers/trts_rf_classifier.pkl
+!outputs/classifiers/trts_rf_scaler.pkl
 
 # Model checkpoints
 *.pt

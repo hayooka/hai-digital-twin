@@ -19,5 +19,6 @@ dependencies:
       - pyyaml>=6.0
       - dowhy>=0.14
       - tqdm>=4.67
+      - xgboost>=2.0
       - ipykernel>=7.2
       - jupyter_client>=8.8
